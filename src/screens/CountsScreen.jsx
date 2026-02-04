@@ -80,7 +80,7 @@ const CountsScreen = ({ navigation }) => {
             }));
             setItems(initializedItems);
         } catch (err) {
-            console.error('Error loading items:', err);
+            // console.error('Error loading items:', err);
             const errorMsg = err.response?.data?.detail || 'Error al cargar ítems';
             Alert.alert('Error', errorMsg);
         } finally {
@@ -172,7 +172,7 @@ const CountsScreen = ({ navigation }) => {
             setItems(newItems);
 
         } catch (err) {
-            console.error('Error saving:', err);
+            // console.error('Error saving:', err);
             Alert.alert('Error', 'No se pudieron guardar los conteos');
         } finally {
             setSaving(false);

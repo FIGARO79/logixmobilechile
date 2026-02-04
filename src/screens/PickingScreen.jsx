@@ -59,7 +59,7 @@ const PickingScreen = ({ navigation }) => {
             const res = await client.get('/api/picking/tracking');
             setRecentOrders(res.data);
         } catch (e) {
-            console.error('Error loading recent orders:', e);
+            // console.error('Error loading recent orders:', e);
         }
     };
 
@@ -90,7 +90,7 @@ const PickingScreen = ({ navigation }) => {
                 Alert.alert('Error', 'Pedido vacío o no encontrado');
             }
         } catch (err) {
-            console.error('Error loading order:', err);
+            // console.error('Error loading order:', err);
             Alert.alert('Error', 'Pedido no encontrado');
         } finally {
             setLoadingOrder(false);
@@ -179,7 +179,7 @@ const PickingScreen = ({ navigation }) => {
             setShowPackagesModal(false);
             handleReset();
         } catch (err) {
-            console.error('Error saving audit:', err);
+            // console.error('Error saving audit:', err);
             Alert.alert('Error', 'No se pudo guardar la auditoría');
         } finally {
             setSaving(false);

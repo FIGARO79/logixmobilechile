@@ -38,7 +38,7 @@ export const AuthProvider = ({ children }) => {
             setIsLoading(false);
             return data;
         } catch (error) {
-            console.error('Login error', error);
+            // console.error('Login error', error);
             setIsLoading(false);
             // Throw to let the screen handle the error message display
             const msg = error.response?.data?.error || error.message;
@@ -52,7 +52,7 @@ export const AuthProvider = ({ children }) => {
             // Optional: call backend logout
             // await client.post('/api/logout'); 
         } catch (e) {
-            console.log(e);
+            // console.log(e);
         }
 
         setUserInfo(null);
@@ -71,7 +71,7 @@ export const AuthProvider = ({ children }) => {
             setSplashLoading(false);
         } catch (e) {
             setSplashLoading(false);
-            console.log(`isLogged in error ${e}`);
+            // console.log(`isLogged in error ${e}`);
         }
     };
 

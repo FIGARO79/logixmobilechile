@@ -64,7 +64,7 @@ const InboundScreen = ({ navigation }) => {
             const res = await client.get('/api/get_logs?limit=20');
             setLogs(res.data);
         } catch (e) {
-            console.error('Error loading logs:', e);
+            // console.error('Error loading logs:', e);
         } finally {
             setLogsLoading(false);
         }
@@ -182,7 +182,7 @@ const InboundScreen = ({ navigation }) => {
             const res = await client.get(`/api/find_item/${encodeURIComponent(log.itemCode)}/${encodeURIComponent(log.importReference)}`);
             setItemData(res.data);
         } catch (e) {
-            console.error(e);
+            // console.error(e);
         }
     };
 
@@ -274,6 +274,7 @@ const InboundScreen = ({ navigation }) => {
                                     onChangeText={t => setImportRef(t.toUpperCase())}
                                     placeholder="I.R."
                                     editable={!editId}
+                                    keyboardType="numeric"
                                     autoCapitalize="characters"
                                 />
                             </View>

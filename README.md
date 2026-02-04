@@ -1,97 +1,85 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# LogixMobile
 
-# Getting Started
+Aplicación móvil para la gestión de inventario y logística, desarrollada con React Native.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## 📱 Módulos Implementados
 
-## Step 1: Start Metro
+La aplicación cuenta con 4 módulos principales totalmente funcionales:
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+### 1. Stock (Consulta de Inventario)
+- Búsqueda de items por código o descripción.
+- Escaneo de códigos QR/Barras.
+- Visualización de detalles: Ubicación (Bin), Cantidad Física, Bins Adicionales, ABC.
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+### 2. Conteos Cíclicos (Cycle Counts)
+- Planificación diaria de conteos.
+- Selección de fecha mediante calendario.
+- Lista de items programados.
+- Ingreso de cantidades físicas.
+- Guardado masivo de conteos.
+- Indicadores visuales de estado (Pendiente, Contado, Guardado).
 
-```sh
-# Using npm
-npm start
+### 3. Auditoría de Picking (Picking Audit)
+- Carga de pedidos por Número de Orden + Despatch.
+- Historial de pedidos recientes.
+- Auditoría activa: Escaneo de items contra requerimientos.
+- Feedback visual y vibración (Correcto/Incorrecto/Exceso).
+- Cálculo de diferencias.
+- Cierre de auditoría con conteo de bultos.
 
-# OR using Yarn
-yarn start
+### 4. Inbound (Recepción) - ⚡ Optimizado
+- Registro de entrada de mercancía.
+- Búsqueda optimizada de items (Caché en memoria O(1)).
+- Carga diferida (Lazy loading) de registros log.
+- Paginación para alto rendimiento.
+- Edición y eliminación de registros.
+
+---
+
+## 🛠️ Requisitos e Instalación
+
+### Requisitos Previos
+- Node.js > 18
+- Java JDK 17
+- Android Studio & SDK
+- Dispositivo Android o Emulador
+
+### Instalación de Dependencias
+```bash
+npm install
 ```
 
-## Step 2: Build and run your app
+### Ejecutar en Desarrollo
+1. **Iniciar Metro Bundler:**
+   ```bash
+   npm start
+   ```
+2. **Instalar en Android:**
+   ```bash
+   npm run android
+   # o
+   cd android && ./gradlew installDebug
+   ```
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+---
 
-### Android
+## 🚀 Generar APK de Producción (Release)
 
-```sh
-# Using npm
-npm run android
+El proyecto está configurado para generar APKs firmados automáticamente.
 
-# OR using Yarn
-yarn android
-```
+1. **Generar el APK:**
+   ```bash
+   cd android && ./gradlew assembleRelease
+   ```
+2. **Ubicación del archivo:**
+   El APK generado se llamará `LogixMobile.apk` y se encontrará en:
+   `android/app/build/outputs/apk/release/LogixMobile.apk`
 
-### iOS
+---
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+## 🔒 Seguridad
+- **SSL/TLS:** Conexiones seguras forzadas (HTTPS) para APIs de producción.
+- **Network Config:** Configuración de seguridad de red Android ajustada para permitir depuración local (Metro) pero exigir seguridad en remoto.
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
-```
-
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
-```
-
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
-
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
-
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+## 📄 Licencia
+Privada - LogixMobile
