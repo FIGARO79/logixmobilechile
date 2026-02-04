@@ -1,17 +1,25 @@
 import React, { useContext } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { AuthContext } from '../context/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const DashboardScreen = () => {
+const DashboardScreen = ({ navigation }) => {
     const { logout, userInfo } = useContext(AuthContext);
 
     const modules = [
-        { id: 'inbound', title: 'Inbound', desc: 'Gestión de Entradas' },
-        { id: 'counts', title: 'Conteos', desc: 'Inventario Cíclico' },
-        { id: 'picking', title: 'Picking', desc: 'Auditoría de Picking' },
-        { id: 'stock', title: 'Stock', desc: 'Consulta de Inventario' },
+        { id: 'inbound', title: 'Inbound', desc: 'Gestión de Entradas', screen: null },
+        { id: 'counts', title: 'Conteos', desc: 'Inventario Cíclico', screen: 'Counts' },
+        { id: 'picking', title: 'Picking', desc: 'Auditoría de Picking', screen: null },
+        { id: 'stock', title: 'Stock', desc: 'Consulta de Inventario', screen: 'Stock' },
     ];
+
+    const handleModulePress = (module) => {
+        if (module.screen) {
+            navigation.navigate(module.screen);
+        } else {
+            Alert.alert('En Desarrollo', `El módulo "${module.title}" estará disponible pronto.`);
+        }
+    };
 
     return (
         <SafeAreaView style={styles.container}>
@@ -27,7 +35,11 @@ const DashboardScreen = () => {
 
             <ScrollView contentContainerStyle={styles.grid}>
                 {modules.map((module) => (
-                    <TouchableOpacity key={module.id} style={styles.card}>
+                    <TouchableOpacity
+                        key={module.id}
+                        style={styles.card}
+                        onPress={() => handleModulePress(module)}
+                    >
                         <Text style={styles.cardTitle}>{module.title}</Text>
                         <Text style={styles.cardDesc}>{module.desc}</Text>
                     </TouchableOpacity>

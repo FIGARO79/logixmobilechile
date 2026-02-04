@@ -4,6 +4,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthContext } from '../context/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
 import DashboardScreen from '../screens/DashboardScreen';
+import StockScreen from '../screens/StockScreen';
+import CountsScreen from '../screens/CountsScreen';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 
 const Stack = createNativeStackNavigator();
@@ -23,7 +25,11 @@ const AppNavigator = () => {
         <NavigationContainer>
             <Stack.Navigator screenOptions={{ headerShown: false }}>
                 {userInfo ? (
-                    <Stack.Screen name="Dashboard" component={DashboardScreen} />
+                    <>
+                        <Stack.Screen name="Dashboard" component={DashboardScreen} />
+                        <Stack.Screen name="Stock" component={StockScreen} />
+                        <Stack.Screen name="Counts" component={CountsScreen} />
+                    </>
                 ) : (
                     <Stack.Screen name="Login" component={LoginScreen} />
                 )}

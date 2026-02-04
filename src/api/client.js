@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// Backend VPS Address
-const API_URL = 'https://149.56.99.53';
+// Backend VPS Address (usando dominio con certificado SSL válido)
+const API_URL = 'https://logixapp.dev';
 
 const client = axios.create({
     baseURL: API_URL,
