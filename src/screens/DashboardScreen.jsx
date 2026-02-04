@@ -9,7 +9,7 @@ const DashboardScreen = ({ navigation }) => {
     const modules = [
         { id: 'inbound', title: 'Inbound', desc: 'Gestión de Entradas', screen: null },
         { id: 'counts', title: 'Conteos', desc: 'Inventario Cíclico', screen: 'Counts' },
-        { id: 'picking', title: 'Picking', desc: 'Auditoría de Picking', screen: null },
+        { id: 'picking', title: 'Picking', desc: 'Auditoría de Picking', screen: 'Picking' },
         { id: 'stock', title: 'Stock', desc: 'Consulta de Inventario', screen: 'Stock' },
     ];
 
