@@ -1,6 +1,7 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+import groovy.json.JsonSlurper
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -72,6 +73,18 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+def getNpmVersion() {
+    def inputFile = new File(rootProject.projectDir, "../package.json")
+    def packageJson = new groovy.json.JsonSlurper().parseText(inputFile.text)
+    return packageJson.version
+}
+
+def getVersionCodeFromNpm() {
+    def version = getNpmVersion()
+    def (major, minor, patch) = version.tokenize('.')
+    return Integer.parseInt(major) * 10000 + Integer.parseInt(minor) * 100 + Integer.parseInt(patch)
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -82,8 +95,8 @@ android {
         applicationId "com.logixmobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode getVersionCodeFromNpm()
+        versionName getNpmVersion()
     }
     signingConfigs {
         debug {
