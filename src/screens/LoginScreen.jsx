@@ -2,11 +2,13 @@ import React, { useContext, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Image } from 'react-native';
 import { AuthContext } from '../context/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 const LoginScreen = () => {
     const { login, isLoading } = useContext(AuthContext);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [isPasswordVisible, setIsPasswordVisible] = useState(false);
     const [error, setError] = useState('');
 
     const handleLogin = async () => {
@@ -40,19 +42,33 @@ const LoginScreen = () => {
                         value={username}
                         onChangeText={setUsername}
                         placeholder="Ingresa tu usuario"
+                        placeholderTextColor="#999"
                         autoCapitalize="none"
                     />
                 </View>
 
                 <View style={styles.inputContainer}>
                     <Text style={styles.label}>Contraseña</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={password}
-                        onChangeText={setPassword}
-                        placeholder="Ingresa tu contraseña"
-                        secureTextEntry
-                    />
+                    <View style={styles.passwordContainer}>
+                        <TextInput
+                            style={styles.passwordInput}
+                            value={password}
+                            onChangeText={setPassword}
+                            placeholder="Ingresa tu contraseña"
+                            placeholderTextColor="#999"
+                            secureTextEntry={!isPasswordVisible}
+                        />
+                        <TouchableOpacity
+                            style={styles.eyeIcon}
+                            onPress={() => setIsPasswordVisible(!isPasswordVisible)}
+                        >
+                            <Icon
+                                name={isPasswordVisible ? "eye-off" : "eye"}
+                                size={24}
+                                color="#666"
+                            />
+                        </TouchableOpacity>
+                    </View>
                 </View>
 
                 <TouchableOpacity
@@ -103,6 +119,24 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         padding: 12,
         fontSize: 16,
+        color: '#000', // Explicit text color
+    },
+    passwordContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#ddd',
+        borderRadius: 8,
+    },
+    passwordInput: {
+        flex: 1,
+        padding: 12,
+        fontSize: 16,
+        color: '#000', // Explicit text color
+    },
+    eyeIcon: {
+        padding: 10,
     },
     button: {
         backgroundColor: '#0070d2',

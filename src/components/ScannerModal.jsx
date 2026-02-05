@@ -7,17 +7,24 @@ import {
     Modal,
     Alert,
     PermissionsAndroid,
-    Platform
+    Platform,
+    ActivityIndicator
 } from 'react-native';
 import { Camera } from 'react-native-camera-kit';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 const ScannerModal = ({ visible, onScan, onClose }) => {
     const [hasPermission, setHasPermission] = useState(null);
+    const [isFlashOn, setIsFlashOn] = useState(false);
     const cameraRef = useRef(null);
 
-    const requestPermission = async () => {
+    const checkPermission = async () => {
         if (Platform.OS === 'android') {
             try {
+                // First check if already granted to avoid unnecessary request dialog
+                const check = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA);
+                if (check) return true;
+
                 const granted = await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.CAMERA,
                     {
@@ -39,7 +46,11 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
 
     React.useEffect(() => {
         if (visible) {
-            requestPermission().then(setHasPermission);
+            // Only check if we haven't already determined permission
+            if (hasPermission === null) {
+                checkPermission().then(setHasPermission);
+            }
+            setIsFlashOn(false); // Reset flash when modal opens
         }
     }, [visible]);
 
@@ -50,7 +61,22 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
         }
     };
 
+    const toggleFlash = () => {
+        setIsFlashOn((prev) => !prev);
+    };
+
     if (!visible) return null;
+
+    if (hasPermission === null) {
+        return (
+            <Modal visible={visible} transparent animationType="none">
+                <View style={[styles.container, styles.loadingContainer]}>
+                    <ActivityIndicator size="large" color="#0070d2" />
+                    <Text style={styles.loadingText}>Iniciando cámara...</Text>
+                </View>
+            </Modal>
+        );
+    }
 
     if (hasPermission === false) {
         Alert.alert(
@@ -58,7 +84,7 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
             'Se necesita acceso a la cámara para escanear códigos.',
             [{ text: 'OK', onPress: onClose }]
         );
-        return null;
+        return null; // Will close via alert callback essentially
     }
 
     return (
@@ -74,6 +100,13 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
                         <Text style={styles.closeText}>✕ Cerrar</Text>
                     </TouchableOpacity>
                     <Text style={styles.title}>Escanear Código</Text>
+                    <TouchableOpacity onPress={toggleFlash} style={styles.flashButton}>
+                        <Icon
+                            name={isFlashOn ? "flash" : "flash-off"}
+                            size={24}
+                            color={isFlashOn ? "#FFD700" : "#fff"}
+                        />
+                    </TouchableOpacity>
                 </View>
 
                 {/* Camera View */}
@@ -87,6 +120,7 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
                             showFrame={true}
                             laserColor="#0070d2"
                             frameColor="#0070d2"
+                            torchMode={isFlashOn ? 'on' : 'off'}
                         />
                     )}
 
@@ -121,6 +155,7 @@ const styles = StyleSheet.create({
         paddingTop: 48,
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between', // Changed to space-between
     },
     closeButton: {
         paddingRight: 16,
@@ -133,6 +168,11 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 18,
         fontWeight: 'bold',
+        textAlign: 'center', // Added for better centering
+        flex: 1, // Added to take up available space
+    },
+    flashButton: {
+        paddingLeft: 16,
     },
     cameraContainer: {
         flex: 1,
@@ -195,6 +235,15 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 8,
         borderRadius: 4,
+    },
+    loadingContainer: {
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    loadingText: {
+        color: '#fff',
+        marginTop: 10,
+        fontSize: 16,
     },
 });
 
