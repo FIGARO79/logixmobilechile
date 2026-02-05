@@ -76,3 +76,4 @@ yarn-error.log
 
 # Reference VPS code (not part of mobile app)
 logix_react_vps/
+vscode/
