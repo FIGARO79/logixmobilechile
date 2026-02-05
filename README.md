@@ -65,15 +65,28 @@ npm install
 
 ## 🚀 Generar APK de Producción (Release)
 
-El proyecto está configurado para generar APKs firmados automáticamente.
+El proyecto está configurado para generar APKs firmados automáticamente y sincronizar la versión con `package.json`.
 
-1. **Generar el APK:**
-   ```bash
-   cd android && ./gradlew assembleRelease
-   ```
-2. **Ubicación del archivo:**
-   El APK generado se llamará `LogixMobile.apk` y se encontrará en:
-   `android/app/build/outputs/apk/release/LogixMobile.apk`
+### 1. Actualizar Versión (Importante)
+Para subir la versión de la app (necesario para actualizaciones), usa uno de los siguientes comandos en la raíz del proyecto:
+```bash
+npm version patch  # ej: 0.0.1 -> 0.0.2
+# o
+npm version minor  # ej: 0.0.1 -> 0.1.0
+# o
+npm version major  # ej: 0.0.1 -> 1.0.0
+```
+Esto actualizará automáticamente el `versionCode` y `versionName` en la configuración de Android.
+
+### 2. Generar el APK
+```bash
+cd android && ./gradlew assembleRelease
+```
+
+### 3. Ubicación del archivo
+El APK generado se llamará `LogixMobile.apk` y se encontrará en:
+`android/app/build/outputs/apk/release/LogixMobile.apk`
+
 
 ---
 
