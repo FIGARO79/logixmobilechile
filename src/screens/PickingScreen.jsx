@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
 import ScannerModal from '../components/ScannerModal';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Custom QR Icon component
 const QrIcon = ({ size = 20, color = '#fff' }) => (
@@ -45,6 +46,7 @@ const PickingScreen = ({ navigation }) => {
     const [showPackagesModal, setShowPackagesModal] = useState(false);
     const [showDiffModal, setShowDiffModal] = useState(false);
     const [packagesCount, setPackagesCount] = useState('');
+    const [manualCode, setManualCode] = useState('');
     const [saving, setSaving] = useState(false);
 
     const itemInputRef = useRef(null);
@@ -59,7 +61,7 @@ const PickingScreen = ({ navigation }) => {
             const res = await client.get('/api/picking/tracking');
             setRecentOrders(res.data);
         } catch (e) {
-            // console.error('Error loading recent orders:', e);
+            console.error('Error loading recent orders:', e);
         }
     };
 
@@ -90,7 +92,7 @@ const PickingScreen = ({ navigation }) => {
                 Alert.alert('Error', 'Pedido vacío o no encontrado');
             }
         } catch (err) {
-            // console.error('Error loading order:', err);
+            console.error('Error loading order:', err);
             Alert.alert('Error', 'Pedido no encontrado');
         } finally {
             setLoadingOrder(false);
@@ -108,37 +110,64 @@ const PickingScreen = ({ navigation }) => {
     };
 
     const handleScan = (code) => {
+        console.log('[DEBUG] Scanned code:', code);
         setScannerOpen(false);
+
+        if (!code || typeof code !== 'string') {
+            console.warn('[DEBUG] Invalid scan result:', code);
+            return;
+        }
+
         const cleanCode = code.trim().toUpperCase();
         if (!cleanCode) return;
 
-        // Find item - prioritize incomplete items
-        let itemIndex = orderItems.findIndex(i => i.code === cleanCode && i.qty_scan < i.qty_req);
-        if (itemIndex === -1) {
-            itemIndex = orderItems.findIndex(i => i.code === cleanCode);
-        }
+        // Find if item exists in order
+        console.log('[DEBUG] Total items in orderItems:', orderItems.length);
+        const itemExists = orderItems.some(i => i.code === cleanCode);
 
-        if (itemIndex > -1) {
-            const newItems = [...orderItems];
-            const item = newItems[itemIndex];
-            item.qty_scan += 1;
-            item.difference = item.qty_scan - item.qty_req;
-            setOrderItems(newItems);
-
-            if (item.qty_scan <= item.qty_req) {
-                // Success feedback
-                Vibration.vibrate(50);
-                Alert.alert('✓ Leído', item.code);
-            } else {
-                // Over-scan warning
-                Vibration.vibrate([0, 100, 50, 100]);
-                Alert.alert('⚠️ Exceso', `${item.code} - Cantidad excedida`);
+        if (itemExists) {
+            // Find specific index for incomplete items if possible
+            let targetIndex = orderItems.findIndex(i => i.code === cleanCode && i.qty_scan < i.qty_req);
+            if (targetIndex === -1) {
+                targetIndex = orderItems.findIndex(i => i.code === cleanCode);
             }
+
+            const newItems = orderItems.map((item, idx) => {
+                if (idx === targetIndex) {
+                    const updatedQtyScan = item.qty_scan + 1;
+                    const isExcess = updatedQtyScan > item.qty_req;
+
+                    // Side effects (Feedback)
+                    if (isExcess) {
+                        Vibration.vibrate([0, 100, 50, 100]);
+                        Alert.alert('⚠️ Exceso', `${item.code} - Cantidad excedida`);
+                    } else {
+                        Vibration.vibrate(50);
+                        Alert.alert('✓ Leído', item.code);
+                    }
+
+                    return {
+                        ...item,
+                        qty_scan: updatedQtyScan,
+                        difference: updatedQtyScan - item.qty_req
+                    };
+                }
+                return item;
+            });
+
+            setOrderItems(newItems);
         } else {
             // Item not in order
+            console.log('[DEBUG] Item not found in order:', cleanCode);
             Vibration.vibrate([0, 200, 100, 200]);
             Alert.alert('✗ No encontrado', `Item NO pertenece al pedido: ${cleanCode}`);
         }
+    };
+
+    const handleManualSubmit = () => {
+        if (!manualCode.trim()) return;
+        handleScan(manualCode);
+        setManualCode('');
     };
 
     const handleFinalize = () => {
@@ -179,7 +208,7 @@ const PickingScreen = ({ navigation }) => {
             setShowPackagesModal(false);
             handleReset();
         } catch (err) {
-            // console.error('Error saving audit:', err);
+            console.error('Error saving audit:', err);
             Alert.alert('Error', 'No se pudo guardar la auditoría');
         } finally {
             setSaving(false);
@@ -275,15 +304,35 @@ const PickingScreen = ({ navigation }) => {
                         </TouchableOpacity>
                     </View>
 
-                    {/* Scanner Button */}
-                    <View style={styles.scanSection}>
-                        <TouchableOpacity
-                            style={styles.bigScanButton}
-                            onPress={() => setScannerOpen(true)}
-                        >
-                            <QrIcon size={28} color="#fff" />
-                            <Text style={styles.bigScanText}>Escanear Item</Text>
-                        </TouchableOpacity>
+                    {/* Consolidated Scan & Search Bar */}
+                    <View style={styles.searchBarSection}>
+                        <View style={styles.searchBar}>
+                            <TouchableOpacity
+                                style={styles.scanIconButton}
+                                onPress={() => setScannerOpen(true)}
+                            >
+                                <QrIcon size={24} color="#0854a0" />
+                            </TouchableOpacity>
+
+                            <TextInput
+                                style={styles.searchBarInput}
+                                value={manualCode}
+                                onChangeText={setManualCode}
+                                placeholder="Escanear o escribir código..."
+                                placeholderTextColor="#999"
+                                autoCapitalize="characters"
+                                onSubmitEditing={handleManualSubmit}
+                                returnKeyType="search"
+                            />
+
+                            <TouchableOpacity
+                                style={[styles.searchConfirmButton, !manualCode.trim() && styles.searchConfirmButtonDisabled]}
+                                onPress={handleManualSubmit}
+                                disabled={!manualCode.trim()}
+                            >
+                                <Icon name="magnify" size={24} color="#fff" />
+                            </TouchableOpacity>
+                        </View>
                     </View>
 
                     {/* Progress */}
@@ -649,22 +698,49 @@ const styles = StyleSheet.create({
         color: '#666',
         fontSize: 12,
     },
-    scanSection: {
+    searchBarSection: {
         padding: 12,
+        backgroundColor: '#fff',
+        borderBottomWidth: 1,
+        borderBottomColor: '#eee',
     },
-    bigScanButton: {
-        backgroundColor: '#354a5f',
-        padding: 20,
-        borderRadius: 12,
+    searchBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
+        backgroundColor: '#f1f5f9',
+        borderRadius: 12,
+        paddingHorizontal: 8,
+        height: 56,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
     },
-    bigScanText: {
-        color: '#fff',
-        fontSize: 18,
-        fontWeight: 'bold',
+    scanIconButton: {
+        width: 44,
+        height: 44,
+        borderRadius: 10,
+        backgroundColor: '#fff',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: '#0854a0',
+    },
+    searchBarInput: {
+        flex: 1,
+        fontSize: 16,
+        color: '#1e293b',
+        paddingHorizontal: 12,
+        height: '100%',
+    },
+    searchConfirmButton: {
+        width: 44,
+        height: 44,
+        borderRadius: 10,
+        backgroundColor: '#0854a0',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    searchConfirmButtonDisabled: {
+        backgroundColor: '#94a3b8',
     },
     progressBar: {
         backgroundColor: '#e8f4fc',
@@ -811,10 +887,20 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#ddd',
         borderRadius: 8,
-        padding: 16,
+        padding: 12,
         fontSize: 24,
-        fontWeight: 'bold',
         textAlign: 'center',
+        color: '#333',
+        marginBottom: 20,
+    },
+    manualInput: {
+        backgroundColor: '#f5f5f5',
+        borderWidth: 1,
+        borderColor: '#ddd',
+        borderRadius: 8,
+        padding: 12,
+        fontSize: 18,
+        color: '#333',
         marginBottom: 20,
     },
     modalButtons: {
