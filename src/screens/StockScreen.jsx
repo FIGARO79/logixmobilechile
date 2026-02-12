@@ -53,7 +53,7 @@ const StockScreen = ({ navigation }) => {
             setItemData(response.data);
             setItemCode(''); // Clear input on success
         } catch (err) {
-            // console.error('Search error:', err);
+            console.error('Search error:', err);
             const errorMsg = err.response?.data?.error || err.response?.data?.detail || 'Item no encontrado';
             setError(errorMsg);
             Alert.alert('Error', errorMsg);

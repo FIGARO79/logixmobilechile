@@ -71,17 +71,18 @@ const CountsScreen = ({ navigation }) => {
         try {
             const response = await client.get(`/api/planner/execution/daily_items?date=${date}`);
             const data = response.data;
+            const itemsList = Array.isArray(data) ? data : (data.items || []);
 
             // Initialize each item with input state
-            const initializedItems = data.map(item => ({
+            const initializedItems = itemsList.map(item => ({
                 ...item,
                 physical_qty: '',
                 status: 'pending', // pending, counted, saved
             }));
             setItems(initializedItems);
         } catch (err) {
-            // console.error('Error loading items:', err);
-            const errorMsg = err.response?.data?.detail || 'Error al cargar ítems';
+            console.error('Error loading items:', err);
+            const errorMsg = err.response?.data?.detail || err.response?.data?.error || 'Error al cargar ítems';
             Alert.alert('Error', errorMsg);
         } finally {
             setLoading(false);
@@ -172,8 +173,9 @@ const CountsScreen = ({ navigation }) => {
             setItems(newItems);
 
         } catch (err) {
-            // console.error('Error saving:', err);
-            Alert.alert('Error', 'No se pudieron guardar los conteos');
+            console.error('Save counts error:', err);
+            const errorMsg = err.response?.data?.detail || 'No se pudieron guardar los conteos. Verifique su conexión y los datos ingresados.';
+            Alert.alert('Error', errorMsg);
         } finally {
             setSaving(false);
         }
