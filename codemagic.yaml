@@ -19,7 +19,6 @@ workflows:
           cd ios && pod install
       - name: Build iOS IPA
         script: |
-          # Este comando genera el binario compilado
           xcode-project build-ipa \
             --workspace "${XCODE_WORKSPACE}" \
             --scheme "${XCODE_SCHEME}"
