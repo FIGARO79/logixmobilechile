@@ -4,6 +4,9 @@ import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
+import android.content.Intent
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.modules.core.DeviceEventManagerModule
 
 class MainActivity : ReactActivity() {
 
@@ -19,4 +22,18 @@ class MainActivity : ReactActivity() {
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
       DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    if (intent.action == "com.logixmobile.SCAN_EVENT") {
+      val decodedData = intent.getStringExtra("com.symbol.datawedge.data_string")
+      val scanMap = Arguments.createMap()
+      scanMap.putString("code", decodedData)
+      
+      this.reactInstanceManager.currentReactContext?.let { context ->
+        context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit("datawedge_broadcast_intent", scanMap)
+      }
+    }
+  }
 }

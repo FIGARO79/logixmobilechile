@@ -17,6 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
 import ScannerModal from '../components/ScannerModal';
+import useDataWedge from '../hooks/useDataWedge';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Custom QR Icon component
@@ -57,6 +58,9 @@ const PickingScreen = ({ navigation }) => {
     const [packagesCount, setPackagesCount] = useState('');
     const [manualCode, setManualCode] = useState('');
     const [saving, setSaving] = useState(false);
+
+    // Integración de escaneo por hardware (Zebra)
+    useDataWedge(handleScan);
 
     // Load recent orders on mount
     useEffect(() => {
@@ -368,7 +372,7 @@ const PickingScreen = ({ navigation }) => {
                         <TouchableOpacity onPress={prevPackage} style={styles.pkgNavButton}>
                             <Icon name="chevron-left" size={28} color="#0854a0" />
                         </TouchableOpacity>
-                        <TouchableOpacity 
+                        <TouchableOpacity
                             style={styles.pkgDisplay}
                             onPress={() => setShowReviewModal(true)}
                         >

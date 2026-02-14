@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
 import ScannerModal from '../components/ScannerModal';
+import useDataWedge from '../hooks/useDataWedge';
 
 // Custom QR Icon component
 const QrIcon = ({ size = 20, color = '#fff' }) => (
@@ -46,6 +47,9 @@ const InboundScreen = ({ navigation }) => {
     const [scannerOpen, setScannerOpen] = useState(false);
     const [logsExpanded, setLogsExpanded] = useState(false);
     const [logsLoading, setLogsLoading] = useState(false);
+
+    // Integración de escaneo por hardware (Zebra)
+    useDataWedge(handleScan);
 
     // Refs
     const quantityRef = useRef(null);
