@@ -45,6 +45,9 @@ const PickingScreen = ({ navigation }) => {
     const [scannerOpen, setScannerOpen] = useState(false);
     const [showPackagesModal, setShowPackagesModal] = useState(false);
     const [showDiffModal, setShowDiffModal] = useState(false);
+    const [showQtyModal, setShowQtyModal] = useState(false);
+    const [selectedItem, setSelectedItem] = useState(null);
+    const [tempQty, setTempQty] = useState('1');
     const [packagesCount, setPackagesCount] = useState('');
     const [manualCode, setManualCode] = useState('');
     const [saving, setSaving] = useState(false);
@@ -82,9 +85,9 @@ const PickingScreen = ({ navigation }) => {
                     code: row['Item Code'],
                     description: row['Item Description'],
                     order_line: row['Order Line'],
-                    qty_req: parseInt(row['Qty'] || 0),
+                    qty_req: parseInt(row['Qty'] || 0, 10),
                     qty_scan: 0,
-                    difference: 0
+                    difference: -parseInt(row['Qty'] || 0, 10)
                 }));
                 setOrderItems(items);
                 setAuditActive(true);
@@ -122,46 +125,51 @@ const PickingScreen = ({ navigation }) => {
         if (!cleanCode) return;
 
         // Find if item exists in order
-        console.log('[DEBUG] Total items in orderItems:', orderItems.length);
-        const itemExists = orderItems.some(i => i.code === cleanCode);
+        const item = orderItems.find(i => i.code === cleanCode);
 
-        if (itemExists) {
-            // Find specific index for incomplete items if possible
-            let targetIndex = orderItems.findIndex(i => i.code === cleanCode && i.qty_scan < i.qty_req);
-            if (targetIndex === -1) {
-                targetIndex = orderItems.findIndex(i => i.code === cleanCode);
-            }
-
-            const newItems = orderItems.map((item, idx) => {
-                if (idx === targetIndex) {
-                    const updatedQtyScan = item.qty_scan + 1;
-                    const isExcess = updatedQtyScan > item.qty_req;
-
-                    // Side effects (Feedback)
-                    if (isExcess) {
-                        Vibration.vibrate([0, 100, 50, 100]);
-                        Alert.alert('⚠️ Exceso', `${item.code} - Cantidad excedida`);
-                    } else {
-                        Vibration.vibrate(50);
-                        Alert.alert('✓ Leído', item.code);
-                    }
-
-                    return {
-                        ...item,
-                        qty_scan: updatedQtyScan,
-                        difference: updatedQtyScan - item.qty_req
-                    };
-                }
-                return item;
-            });
-
-            setOrderItems(newItems);
+        if (item) {
+            setSelectedItem(item);
+            setTempQty('1');
+            setShowQtyModal(true);
+            Vibration.vibrate(50);
         } else {
             // Item not in order
             console.log('[DEBUG] Item not found in order:', cleanCode);
             Vibration.vibrate([0, 200, 100, 200]);
             Alert.alert('✗ No encontrado', `Item NO pertenece al pedido: ${cleanCode}`);
         }
+    };
+
+    const confirmQuantity = () => {
+        const qtyToAdd = parseInt(tempQty, 10);
+        if (isNaN(qtyToAdd) || qtyToAdd <= 0) {
+            Alert.alert('Error', 'Ingrese una cantidad válida');
+            return;
+        }
+
+        const newItems = orderItems.map(item => {
+            if (item.code === selectedItem.code) {
+                const updatedQtyScan = item.qty_scan + qtyToAdd;
+                const isExcess = updatedQtyScan > item.qty_req;
+
+                if (isExcess) {
+                    Vibration.vibrate([0, 100, 50, 100]);
+                    // We allow excess but notify
+                }
+
+                return {
+                    ...item,
+                    qty_scan: updatedQtyScan,
+                    difference: updatedQtyScan - item.qty_req
+                };
+            }
+            return item;
+        });
+
+        setOrderItems(newItems);
+        setShowQtyModal(false);
+        setSelectedItem(null);
+        setTempQty('1');
     };
 
     const handleManualSubmit = () => {
@@ -426,6 +434,42 @@ const PickingScreen = ({ navigation }) => {
                                     ) : (
                                         <Text style={styles.modalButtonTextPrimary}>Guardar</Text>
                                     )}
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </View>
+                </Modal>
+
+                {/* Quantity Modal */}
+                <Modal visible={showQtyModal} transparent animationType="fade">
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>🔢 Ingresar Cantidad</Text>
+                            <Text style={styles.modalText}>Item: {selectedItem?.code}</Text>
+                            <TextInput
+                                style={styles.packagesInput}
+                                value={tempQty}
+                                onChangeText={setTempQty}
+                                keyboardType="numeric"
+                                placeholder="1"
+                                autoFocus
+                                selectTextOnFocus
+                            />
+                            <View style={styles.modalButtons}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.modalButtonSecondary]}
+                                    onPress={() => {
+                                        setShowQtyModal(false);
+                                        setSelectedItem(null);
+                                    }}
+                                >
+                                    <Text style={styles.modalButtonTextSecondary}>Cancelar</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.modalButtonPrimary]}
+                                    onPress={confirmQuantity}
+                                >
+                                    <Text style={styles.modalButtonTextPrimary}>Confirmar</Text>
                                 </TouchableOpacity>
                             </View>
                         </View>
