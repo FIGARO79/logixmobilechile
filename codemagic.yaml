@@ -1,26 +1,25 @@
 workflows:
-  ios-build:
-    name: LogixMobile iOS
+  ios-workflow:
+    name: LogixMobile iOS Build
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
-      node: 18 # O la versión que estés usando
+      node: latest
       xcode: latest
       cocoapods: default
       vars:
         XCODE_WORKSPACE: "ios/LogixMobile.xcworkspace"
         XCODE_SCHEME: "LogixMobile"
     scripts:
-      - name: Instalar dependencias de NPM
+      - name: Install dependencies
         script: |
           npm install
-      - name: Instalar pods
+      - name: Install CocoaPods
         script: |
           cd ios && pod install
-      - name: Compilar archivo .ipa
+      - name: Build iOS IPA
         script: |
-          # Este comando genera el binario. 
-          # Nota: Fallará si no has configurado la firma (Code Signing) en el panel de Codemagic.
+          # Este comando genera el binario compilado
           xcode-project build-ipa \
             --workspace "${XCODE_WORKSPACE}" \
             --scheme "${XCODE_SCHEME}"
