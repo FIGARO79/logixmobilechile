@@ -56,22 +56,28 @@ const CountsScreen = ({ navigation }) => {
     const [saving, setSaving] = useState(false);
     const [scannerOpen, setScannerOpen] = useState(false);
     const [showDatePicker, setShowDatePicker] = useState(false);
+    const [itemsWithDiffCount, setItemsWithDiffCount] = useState(0);
+    const [isFilteringDifferences, setIsFilteringDifferences] = useState(false);
     const flatListRef = useRef(null);
 
     // Load items when date changes
     useEffect(() => {
         if (selectedDate) {
             fetchDailyItems(selectedDate);
+            setIsFilteringDifferences(false);
         }
     }, [selectedDate]);
 
     const fetchDailyItems = async (date) => {
         setLoading(true);
         setItems([]);
+        setItemsWithDiffCount(0);
         try {
             const response = await client.get(`/api/planner/execution/daily_items?date=${date}`);
             const data = response.data;
-            const itemsList = Array.isArray(data) ? data : (data.items || []);
+            
+            const itemsList = data.items || [];
+            setItemsWithDiffCount(data.items_with_diff_count || 0);
 
             // Initialize each item with input state
             const initializedItems = itemsList.map(item => ({
@@ -84,6 +90,30 @@ const CountsScreen = ({ navigation }) => {
             console.error('Error loading items:', err);
             const errorMsg = err.response?.data?.detail || err.response?.data?.error || 'Error al cargar ítems';
             Alert.alert('Error', errorMsg);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const fetchItemsWithDifferences = async () => {
+        setLoading(true);
+        try {
+            const response = await client.get(`/api/planner/execution/items_with_differences?date=${selectedDate}`);
+            const data = response.data;
+            const itemsList = data.items || [];
+
+            // Initialize each item with empty input for blind re-counting
+            const initializedItems = itemsList.map(item => ({
+                ...item,
+                physical_qty: '', // Empty for blind count
+                status: 'pending',
+                is_difference: true
+            }));
+            setItems(initializedItems);
+            setIsFilteringDifferences(true);
+        } catch (err) {
+            console.error('Error loading differences:', err);
+            Alert.alert('Error', 'No se pudieron cargar las diferencias');
         } finally {
             setLoading(false);
         }
@@ -154,7 +184,7 @@ const CountsScreen = ({ navigation }) => {
                     description: item.description,
                     bin_location: item.bin_location || 'N/A',
                     system_qty: item.system_qty || 0,
-                    physical_qty: parseInt(item.physical_qty) || 0,
+                    physical_qty: parseInt(item.physical_qty, 10) || 0,
                     abc_code: item.abc_code
                 }))
             };
@@ -197,7 +227,7 @@ const CountsScreen = ({ navigation }) => {
         const isSaved = item.status === 'saved';
 
         return (
-            <View style={[styles.itemCard, isSaved && styles.itemCardSaved]}>
+            <View style={[styles.itemCard, isSaved && styles.itemCardSaved, item.is_difference && styles.itemCardDiff]}>
                 <View style={styles.itemHeader}>
                     <View style={styles.itemInfo}>
                         <Text style={styles.itemCode}>{item.item_code}</Text>
@@ -222,7 +252,7 @@ const CountsScreen = ({ navigation }) => {
                     <View style={styles.qtySection}>
                         <Text style={styles.fieldLabel}>Cant. Física</Text>
                         <TextInput
-                            style={[styles.qtyInput, isSaved && styles.qtyInputDisabled]}
+                            style={[styles.qtyInput, isSaved && styles.qtyInputDisabled, item.is_difference && styles.qtyInputDiff]}
                             value={item.physical_qty}
                             onChangeText={(value) => handleCountChange(index, value)}
                             keyboardType="numeric"
@@ -285,9 +315,9 @@ const CountsScreen = ({ navigation }) => {
                     <View style={styles.buttonRow}>
                         <TouchableOpacity
                             style={styles.refreshButton}
-                            onPress={() => fetchDailyItems(selectedDate)}
+                            onPress={() => isFilteringDifferences ? fetchDailyItems(selectedDate) : fetchDailyItems(selectedDate)}
                         >
-                            <Text style={styles.buttonText}>Actualizar</Text>
+                            <Text style={styles.buttonText}>{isFilteringDifferences ? 'Ver Todos' : 'Actualizar'}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
@@ -299,6 +329,36 @@ const CountsScreen = ({ navigation }) => {
                         </TouchableOpacity>
                     </View>
                 </View>
+
+                {/* Differences Banner */}
+                {itemsWithDiffCount > 0 && !isFilteringDifferences && (
+                    <TouchableOpacity 
+                        style={styles.diffBanner}
+                        onPress={fetchItemsWithDifferences}
+                    >
+                        <View style={styles.diffBannerIcon}>
+                            <Text style={styles.diffBannerIconText}>⚠️</Text>
+                        </View>
+                        <View style={styles.diffBannerContent}>
+                            <Text style={styles.diffBannerTitle}>Diferencias Encontradas</Text>
+                            <Text style={styles.diffBannerText}>
+                                Hay {itemsWithDiffCount} ítems con diferencias. Toca para corregir.
+                            </Text>
+                        </View>
+                        <Text style={styles.diffBannerAction}>CORREGIR →</Text>
+                    </TouchableOpacity>
+                )}
+
+                {isFilteringDifferences && (
+                    <View style={styles.filterInfo}>
+                        <Text style={styles.filterInfoText}>
+                            Mostrando {items.length} ítems con diferencias
+                        </Text>
+                        <TouchableOpacity onPress={() => fetchDailyItems(selectedDate)}>
+                            <Text style={styles.filterClearText}>Quitar filtro</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
 
                 {/* Content */}
                 {loading ? (
@@ -475,6 +535,10 @@ const styles = StyleSheet.create({
         backgroundColor: '#f0fdf4',
         borderColor: '#86efac',
     },
+    itemCardDiff: {
+        borderColor: '#f87171',
+        borderLeftWidth: 4,
+    },
     itemHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -539,6 +603,20 @@ const styles = StyleSheet.create({
         color: '#888',
         marginTop: 4,
     },
+    diffInfo: {
+        marginTop: 8,
+        backgroundColor: '#fff1f2',
+        padding: 6,
+        borderRadius: 4,
+        alignSelf: 'flex-start',
+    },
+    diffInfoText: {
+        fontSize: 11,
+        color: '#991b1b',
+    },
+    diffInfoBold: {
+        fontWeight: 'bold',
+    },
     qtyInput: {
         width: 80,
         backgroundColor: '#f9fafb',
@@ -554,6 +632,10 @@ const styles = StyleSheet.create({
         backgroundColor: '#e5e7eb',
         color: '#6b7280',
     },
+    qtyInputDiff: {
+        borderColor: '#f87171',
+        backgroundColor: '#fff1f2',
+    },
     savedBadge: {
         marginTop: 10,
         alignItems: 'flex-end',
@@ -562,6 +644,64 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: 'bold',
         color: '#16a34a',
+    },
+    diffBanner: {
+        backgroundColor: '#fff7ed',
+        marginHorizontal: 12,
+        marginBottom: 12,
+        padding: 12,
+        borderRadius: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#ffedd5',
+    },
+    diffBannerIcon: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#ffedd5',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    diffBannerIconText: {
+        fontSize: 20,
+    },
+    diffBannerContent: {
+        flex: 1,
+    },
+    diffBannerTitle: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#9a3412',
+    },
+    diffBannerText: {
+        fontSize: 12,
+        color: '#c2410c',
+    },
+    diffBannerAction: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#ea580c',
+        marginLeft: 8,
+    },
+    filterInfo: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginHorizontal: 16,
+        marginBottom: 8,
+    },
+    filterInfoText: {
+        fontSize: 13,
+        color: '#666',
+        fontStyle: 'italic',
+    },
+    filterClearText: {
+        fontSize: 13,
+        color: '#0070d2',
+        fontWeight: 'bold',
     },
     footer: {
         position: 'absolute',

@@ -50,17 +50,28 @@ npm install
 ```
 
 ### Ejecutar en Desarrollo
-1. **Iniciar Metro Bundler:**
+1. **Verificar Dispositivos Conectados:**
+   Asegúrate de que tu dispositivo tiene activada la "Depuración por USB" y ejecútalo para confirmar que es detectado:
+   ```bash
+   adb devices
+   ```
+
+2. **Iniciar Metro Bundler:**
    ```bash
    npm start
    ```
-2. **Instalar en Android:**
+3. **Instalar en Android:**
+   Si tienes un solo dispositivo:
    ```bash
    npm run android
-   # o
-   cd android && ./gradlew installDebug
    ```
-
+   Si tienes múltiples dispositivos, usa el ID obtenido en `adb devices`:
+   ```bash
+   npx react-native run-android --device <ID_DEL_DISPOSITIVO>
+   ```
+   # o directamente con gradle
+   cd android && ./gradlew installDebug
+1
 ---
 
 ## 🚀 Generar APK de Producción (Release)
