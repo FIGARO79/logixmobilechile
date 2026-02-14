@@ -11,7 +11,8 @@ import {
     Modal,
     KeyboardAvoidingView,
     Platform,
-    Vibration
+    Vibration,
+    ScrollView
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
@@ -41,18 +42,21 @@ const PickingScreen = ({ navigation }) => {
     const [customerName, setCustomerName] = useState('');
     const [orderItems, setOrderItems] = useState([]);
 
+    // Package Management State
+    const [currentPackage, setCurrentPackage] = useState(1);
+    const [packageAssignments, setPackageAssignments] = useState({}); // { itemCode: { packageNum: qty } }
+
     // Scanning & Modals
     const [scannerOpen, setScannerOpen] = useState(false);
     const [showPackagesModal, setShowPackagesModal] = useState(false);
     const [showDiffModal, setShowDiffModal] = useState(false);
     const [showQtyModal, setShowQtyModal] = useState(false);
+    const [showReviewModal, setShowReviewModal] = useState(false);
     const [selectedItem, setSelectedItem] = useState(null);
     const [tempQty, setTempQty] = useState('1');
     const [packagesCount, setPackagesCount] = useState('');
     const [manualCode, setManualCode] = useState('');
     const [saving, setSaving] = useState(false);
-
-    const itemInputRef = useRef(null);
 
     // Load recent orders on mount
     useEffect(() => {
@@ -74,6 +78,26 @@ const PickingScreen = ({ navigation }) => {
             return;
         }
 
+        // Check if already audited in recentOrders list
+        const recentInfo = recentOrders.find(
+            o => o.order_number === orderNumber && o.despatch_number === despatchNumber
+        );
+
+        if (recentInfo?.is_audited) {
+            Alert.alert(
+                'Pedido Auditado',
+                'Este pedido ya ha sido auditado anteriormente. ¿Desea auditarlo de nuevo?',
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Auditar de nuevo', onPress: () => fetchOrderData() }
+                ]
+            );
+        } else {
+            fetchOrderData();
+        }
+    };
+
+    const fetchOrderData = async () => {
         setLoadingOrder(true);
         try {
             const res = await client.get(`/api/picking/order/${orderNumber}/${despatchNumber}`);
@@ -90,6 +114,8 @@ const PickingScreen = ({ navigation }) => {
                     difference: -parseInt(row['Qty'] || 0, 10)
                 }));
                 setOrderItems(items);
+                setPackageAssignments({});
+                setCurrentPackage(1);
                 setAuditActive(true);
             } else {
                 Alert.alert('Error', 'Pedido vacío o no encontrado');
@@ -105,6 +131,8 @@ const PickingScreen = ({ navigation }) => {
     const handleReset = () => {
         setAuditActive(false);
         setOrderItems([]);
+        setPackageAssignments({});
+        setCurrentPackage(1);
         setOrderNumber('');
         setDespatchNumber('');
         setCustomerName('');
@@ -113,18 +141,12 @@ const PickingScreen = ({ navigation }) => {
     };
 
     const handleScan = (code) => {
-        console.log('[DEBUG] Scanned code:', code);
         setScannerOpen(false);
-
-        if (!code || typeof code !== 'string') {
-            console.warn('[DEBUG] Invalid scan result:', code);
-            return;
-        }
+        if (!code || typeof code !== 'string') return;
 
         const cleanCode = code.trim().toUpperCase();
         if (!cleanCode) return;
 
-        // Find if item exists in order
         const item = orderItems.find(i => i.code === cleanCode);
 
         if (item) {
@@ -133,8 +155,6 @@ const PickingScreen = ({ navigation }) => {
             setShowQtyModal(true);
             Vibration.vibrate(50);
         } else {
-            // Item not in order
-            console.log('[DEBUG] Item not found in order:', cleanCode);
             Vibration.vibrate([0, 200, 100, 200]);
             Alert.alert('✗ No encontrado', `Item NO pertenece al pedido: ${cleanCode}`);
         }
@@ -147,16 +167,10 @@ const PickingScreen = ({ navigation }) => {
             return;
         }
 
+        // 1. Update overall order items
         const newItems = orderItems.map(item => {
             if (item.code === selectedItem.code) {
                 const updatedQtyScan = item.qty_scan + qtyToAdd;
-                const isExcess = updatedQtyScan > item.qty_req;
-
-                if (isExcess) {
-                    Vibration.vibrate([0, 100, 50, 100]);
-                    // We allow excess but notify
-                }
-
                 return {
                     ...item,
                     qty_scan: updatedQtyScan,
@@ -165,8 +179,22 @@ const PickingScreen = ({ navigation }) => {
             }
             return item;
         });
-
         setOrderItems(newItems);
+
+        // 2. Update package assignments
+        const newAssignments = { ...packageAssignments };
+        const itemCode = selectedItem.code;
+        if (!newAssignments[itemCode]) {
+            newAssignments[itemCode] = {};
+        }
+        const pkgKey = currentPackage.toString();
+        newAssignments[itemCode][pkgKey] = (newAssignments[itemCode][pkgKey] || 0) + qtyToAdd;
+        setPackageAssignments(newAssignments);
+
+        if (selectedItem.qty_scan + qtyToAdd > selectedItem.qty_req) {
+            Vibration.vibrate([0, 100, 50, 100]);
+        }
+
         setShowQtyModal(false);
         setSelectedItem(null);
         setTempQty('1');
@@ -180,16 +208,21 @@ const PickingScreen = ({ navigation }) => {
 
     const handleFinalize = () => {
         const hasDifferences = orderItems.some(i => i.qty_scan !== i.qty_req);
+        // Pre-fill packages count with the highest package number used
+        let maxPkg = currentPackage;
+        Object.values(packageAssignments).forEach(itemPkgs => {
+            Object.keys(itemPkgs).forEach(p => {
+                const pNum = parseInt(p, 10);
+                if (pNum > maxPkg) maxPkg = pNum;
+            });
+        });
+        setPackagesCount(maxPkg.toString());
+
         if (hasDifferences) {
             setShowDiffModal(true);
         } else {
             setShowPackagesModal(true);
         }
-    };
-
-    const handleContinueWithDiff = () => {
-        setShowDiffModal(false);
-        setShowPackagesModal(true);
     };
 
     const submitAudit = async () => {
@@ -207,8 +240,8 @@ const PickingScreen = ({ navigation }) => {
                     qty_req: i.qty_req,
                     qty_scan: i.qty_scan
                 })),
-                packages: parseInt(packagesCount || 0),
-                packages_assignment: {}
+                packages: parseInt(packagesCount || 0, 10),
+                packages_assignment: packageAssignments
             };
 
             await client.post('/api/save_picking_audit', payload);
@@ -224,12 +257,8 @@ const PickingScreen = ({ navigation }) => {
     };
 
     const getItemStyle = (item) => {
-        if (item.qty_scan === item.qty_req && item.qty_scan > 0) {
-            return styles.itemComplete;
-        }
-        if (item.qty_scan > item.qty_req) {
-            return styles.itemOver;
-        }
+        if (item.qty_scan === item.qty_req && item.qty_scan > 0) return styles.itemComplete;
+        if (item.qty_scan > item.qty_req) return styles.itemOver;
         return null;
     };
 
@@ -241,6 +270,22 @@ const PickingScreen = ({ navigation }) => {
     const totalScanned = orderItems.reduce((acc, i) => acc + i.qty_scan, 0);
     const totalRequired = orderItems.reduce((acc, i) => acc + i.qty_req, 0);
     const itemsComplete = orderItems.filter(i => i.qty_scan === i.qty_req && i.qty_scan > 0).length;
+
+    // Package Helper Functions
+    const nextPackage = () => setCurrentPackage(prev => prev + 1);
+    const prevPackage = () => setCurrentPackage(prev => Math.max(1, prev - 1));
+
+    const getItemsInCurrentPackage = () => {
+        const pkgKey = currentPackage.toString();
+        const list = [];
+        Object.entries(packageAssignments).forEach(([code, pkgs]) => {
+            if (pkgs[pkgKey] > 0) {
+                const item = orderItems.find(i => i.code === code);
+                list.push({ code, qty: pkgs[pkgKey], description: item?.description });
+            }
+        });
+        return list;
+    };
 
     const renderItem = ({ item }) => (
         <View style={[styles.itemCard, getItemStyle(item)]}>
@@ -261,9 +306,17 @@ const PickingScreen = ({ navigation }) => {
                     <Text style={styles.qtyValue}>{item.qty_req}</Text>
                 </View>
                 <View style={styles.qtyBox}>
-                    <Text style={styles.qtyLabel}>Escaneado</Text>
+                    <Text style={styles.qtyLabel}>Auditado</Text>
                     <Text style={[styles.qtyValue, styles.qtyScanned]}>{item.qty_scan}</Text>
                 </View>
+                {packageAssignments[item.code] && (
+                    <View style={styles.itemPackageInfo}>
+                        <Icon name="package-variant" size={14} color="#666" />
+                        <Text style={styles.itemPackageText}>
+                            {Object.entries(packageAssignments[item.code]).map(([p, q]) => `B${p}: ${q}`).join(' | ')}
+                        </Text>
+                    </View>
+                )}
             </View>
         </View>
     );
@@ -292,6 +345,7 @@ const PickingScreen = ({ navigation }) => {
 
     // Active Audit View
     if (auditActive) {
+        const pkgItems = getItemsInCurrentPackage();
         return (
             <SafeAreaView style={styles.container}>
                 <KeyboardAvoidingView
@@ -301,18 +355,35 @@ const PickingScreen = ({ navigation }) => {
                     {/* Header */}
                     <View style={styles.auditHeader}>
                         <View style={styles.auditInfo}>
-                            <Text style={styles.auditTitle}>Auditoría en Curso</Text>
-                            <Text style={styles.auditOrder}>
-                                Orden: <Text style={styles.auditOrderNum}>{orderNumber} / {despatchNumber}</Text>
-                            </Text>
-                            <Text style={styles.auditCustomer}>Cliente: {customerName}</Text>
+                            <Text style={styles.auditTitle}>Auditoría: {orderNumber}</Text>
+                            <Text style={styles.auditCustomer} numberOfLines={1}>{customerName}</Text>
                         </View>
                         <TouchableOpacity onPress={handleReset} style={styles.cancelButton}>
-                            <Text style={styles.cancelButtonText}>Cancelar</Text>
+                            <Text style={styles.cancelButtonText}>Cerrar</Text>
                         </TouchableOpacity>
                     </View>
 
-                    {/* Consolidated Scan & Search Bar */}
+                    {/* Package Selector Bar */}
+                    <View style={styles.packageBar}>
+                        <TouchableOpacity onPress={prevPackage} style={styles.pkgNavButton}>
+                            <Icon name="chevron-left" size={28} color="#0854a0" />
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                            style={styles.pkgDisplay}
+                            onPress={() => setShowReviewModal(true)}
+                        >
+                            <Icon name="package-variant-closed" size={20} color="#0854a0" />
+                            <Text style={styles.pkgDisplayText}>BULTO {currentPackage}</Text>
+                            <View style={styles.pkgItemCount}>
+                                <Text style={styles.pkgItemCountText}>{pkgItems.length} ítems</Text>
+                            </View>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={nextPackage} style={styles.pkgNavButton}>
+                            <Icon name="plus-circle-outline" size={28} color="#0854a0" />
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* consolidated Scan & Search Bar */}
                     <View style={styles.searchBarSection}>
                         <View style={styles.searchBar}>
                             <TouchableOpacity
@@ -346,8 +417,7 @@ const PickingScreen = ({ navigation }) => {
                     {/* Progress */}
                     <View style={styles.progressBar}>
                         <Text style={styles.progressText}>
-                            Items: {itemsComplete}/{orderItems.length} |
-                            Unidades: {totalScanned}/{totalRequired}
+                            Progreso: {itemsComplete}/{orderItems.length} líneas completadas
                         </Text>
                     </View>
 
@@ -365,7 +435,7 @@ const PickingScreen = ({ navigation }) => {
                             style={styles.finalizeButton}
                             onPress={handleFinalize}
                         >
-                            <Text style={styles.finalizeButtonText}>Finalizar Auditoría</Text>
+                            <Text style={styles.finalizeButtonText}>Finalizar y Guardar</Text>
                         </TouchableOpacity>
                     </View>
                 </KeyboardAvoidingView>
@@ -377,65 +447,32 @@ const PickingScreen = ({ navigation }) => {
                     onClose={() => setScannerOpen(false)}
                 />
 
-                {/* Differences Alert Modal */}
-                <Modal visible={showDiffModal} transparent animationType="fade">
+                {/* Package Review Modal */}
+                <Modal visible={showReviewModal} transparent animationType="slide">
                     <View style={styles.modalOverlay}>
-                        <View style={styles.modalContent}>
-                            <Text style={styles.modalTitle}>⚠️ Diferencias Detectadas</Text>
-                            <Text style={styles.modalText}>
-                                Hay ítems con diferencias. ¿Desea finalizar de todas formas?
-                            </Text>
-                            <View style={styles.modalButtons}>
-                                <TouchableOpacity
-                                    style={[styles.modalButton, styles.modalButtonSecondary]}
-                                    onPress={() => setShowDiffModal(false)}
-                                >
-                                    <Text style={styles.modalButtonTextSecondary}>Cancelar</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.modalButton, styles.modalButtonWarning]}
-                                    onPress={handleContinueWithDiff}
-                                >
-                                    <Text style={styles.modalButtonTextPrimary}>Sí, Continuar</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    </View>
-                </Modal>
-
-                {/* Packages Modal */}
-                <Modal visible={showPackagesModal} transparent animationType="fade">
-                    <View style={styles.modalOverlay}>
-                        <View style={styles.modalContent}>
-                            <Text style={styles.modalTitle}>📦 Cantidad de Bultos</Text>
-                            <Text style={styles.modalText}>Ingrese el total de paquetes:</Text>
-                            <TextInput
-                                style={styles.packagesInput}
-                                value={packagesCount}
-                                onChangeText={setPackagesCount}
-                                keyboardType="numeric"
-                                placeholder="0"
-                                autoFocus
-                            />
-                            <View style={styles.modalButtons}>
-                                <TouchableOpacity
-                                    style={[styles.modalButton, styles.modalButtonSecondary]}
-                                    onPress={() => setShowPackagesModal(false)}
-                                >
-                                    <Text style={styles.modalButtonTextSecondary}>Cancelar</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.modalButton, styles.modalButtonPrimary]}
-                                    onPress={submitAudit}
-                                    disabled={saving}
-                                >
-                                    {saving ? (
-                                        <ActivityIndicator color="#fff" size="small" />
-                                    ) : (
-                                        <Text style={styles.modalButtonTextPrimary}>Guardar</Text>
-                                    )}
-                                </TouchableOpacity>
-                            </View>
+                        <View style={[styles.modalContent, { maxHeight: '80%' }]}>
+                            <Text style={styles.modalTitle}>📦 Contenido del Bulto {currentPackage}</Text>
+                            <ScrollView style={styles.reviewList}>
+                                {pkgItems.length === 0 ? (
+                                    <Text style={styles.emptyReviewText}>Este bulto está vacío</Text>
+                                ) : (
+                                    pkgItems.map((it, idx) => (
+                                        <View key={idx} style={styles.reviewItem}>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={styles.reviewItemCode}>{it.code}</Text>
+                                                <Text style={styles.reviewItemDesc} numberOfLines={1}>{it.description}</Text>
+                                            </View>
+                                            <Text style={styles.reviewItemQty}>x{it.qty}</Text>
+                                        </View>
+                                    ))
+                                )}
+                            </ScrollView>
+                            <TouchableOpacity
+                                style={[styles.modalButton, styles.modalButtonPrimary, { marginTop: 20 }]}
+                                onPress={() => setShowReviewModal(false)}
+                            >
+                                <Text style={styles.modalButtonTextPrimary}>Cerrar</Text>
+                            </TouchableOpacity>
                         </View>
                     </View>
                 </Modal>
@@ -444,8 +481,15 @@ const PickingScreen = ({ navigation }) => {
                 <Modal visible={showQtyModal} transparent animationType="fade">
                     <View style={styles.modalOverlay}>
                         <View style={styles.modalContent}>
+                            <View style={styles.qtyModalHeader}>
+                                <Icon name="package-variant-closed" size={24} color="#0854a0" />
+                                <Text style={styles.qtyModalBadge}>Asignando al Bulto {currentPackage}</Text>
+                            </View>
                             <Text style={styles.modalTitle}>🔢 Ingresar Cantidad</Text>
-                            <Text style={styles.modalText}>Item: {selectedItem?.code}</Text>
+                            <View style={styles.selectedItemBox}>
+                                <Text style={styles.selectedItemCode}>{selectedItem?.code}</Text>
+                                <Text style={styles.selectedItemDesc} numberOfLines={1}>{selectedItem?.description}</Text>
+                            </View>
                             <TextInput
                                 style={styles.packagesInput}
                                 value={tempQty}
@@ -475,18 +519,83 @@ const PickingScreen = ({ navigation }) => {
                         </View>
                     </View>
                 </Modal>
+
+                {/* Differences Alert Modal */}
+                <Modal visible={showDiffModal} transparent animationType="fade">
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>⚠️ Diferencias Detectadas</Text>
+                            <Text style={styles.modalText}>
+                                Hay ítems con cantidades incompletas o en exceso. ¿Desea finalizar de todas formas?
+                            </Text>
+                            <View style={styles.modalButtons}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.modalButtonSecondary]}
+                                    onPress={() => setShowDiffModal(false)}
+                                >
+                                    <Text style={styles.modalButtonTextSecondary}>Regresar</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.modalButtonWarning]}
+                                    onPress={() => {
+                                        setShowDiffModal(false);
+                                        setShowPackagesModal(true);
+                                    }}
+                                >
+                                    <Text style={styles.modalButtonTextPrimary}>Sí, Continuar</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </View>
+                </Modal>
+
+                {/* Final Packages Count Modal */}
+                <Modal visible={showPackagesModal} transparent animationType="fade">
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>📦 Confirmar Total de Bultos</Text>
+                            <Text style={styles.modalText}>Se han detectado {packagesCount} bultos utilizados. Confirme el total:</Text>
+                            <TextInput
+                                style={styles.packagesInput}
+                                value={packagesCount}
+                                onChangeText={setPackagesCount}
+                                keyboardType="numeric"
+                                placeholder="0"
+                                autoFocus
+                            />
+                            <View style={styles.modalButtons}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.modalButtonSecondary]}
+                                    onPress={() => setShowPackagesModal(false)}
+                                >
+                                    <Text style={styles.modalButtonTextSecondary}>Cancelar</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.modalButtonPrimary]}
+                                    onPress={submitAudit}
+                                    disabled={saving}
+                                >
+                                    {saving ? (
+                                        <ActivityIndicator color="#fff" size="small" />
+                                    ) : (
+                                        <Text style={styles.modalButtonTextPrimary}>Guardar Auditoría</Text>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </View>
+                </Modal>
             </SafeAreaView>
         );
     }
 
-    // Load Order View
+    // Load Order View (Form unchanged)
     return (
         <SafeAreaView style={styles.container}>
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 style={styles.flex}
             >
-                {/* Header */}
                 <View style={styles.header}>
                     <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                         <Text style={styles.backText}>← Regresar</Text>
@@ -494,7 +603,6 @@ const PickingScreen = ({ navigation }) => {
                     <Text style={styles.title}>Auditoría de Picking</Text>
                 </View>
 
-                {/* Load Order Form */}
                 <View style={styles.formCard}>
                     <View style={styles.inputRow}>
                         <View style={styles.inputGroup}>
@@ -503,7 +611,7 @@ const PickingScreen = ({ navigation }) => {
                                 style={styles.input}
                                 value={orderNumber}
                                 onChangeText={setOrderNumber}
-                                placeholder="Ej: 0043785"
+                                placeholder="0043785"
                                 autoCapitalize="characters"
                             />
                         </View>
@@ -513,7 +621,7 @@ const PickingScreen = ({ navigation }) => {
                                 style={styles.input}
                                 value={despatchNumber}
                                 onChangeText={setDespatchNumber}
-                                placeholder="Ej: 00"
+                                placeholder="00"
                                 autoCapitalize="characters"
                             />
                         </View>
@@ -532,7 +640,6 @@ const PickingScreen = ({ navigation }) => {
                     </TouchableOpacity>
                 </View>
 
-                {/* Recent Orders */}
                 <View style={styles.recentSection}>
                     <View style={styles.recentHeader}>
                         <Text style={styles.recentTitle}>Pedidos Recientes</Text>
@@ -587,10 +694,6 @@ const styles = StyleSheet.create({
         margin: 12,
         padding: 16,
         borderRadius: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
         elevation: 2,
     },
     inputRow: {
@@ -714,39 +817,70 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     auditTitle: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: 'bold',
         color: '#2c3e50',
-        marginBottom: 4,
-    },
-    auditOrder: {
-        fontSize: 14,
-        color: '#666',
-    },
-    auditOrderNum: {
-        fontWeight: 'bold',
-        color: '#333',
-        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     auditCustomer: {
         fontSize: 14,
         color: '#666',
+        marginTop: 2,
     },
     cancelButton: {
-        backgroundColor: '#f0f0f0',
+        backgroundColor: '#fef2f2',
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 6,
     },
     cancelButtonText: {
-        color: '#666',
+        color: '#b91c1c',
         fontSize: 12,
+        fontWeight: 'bold',
+    },
+    packageBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#fff',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#eee',
+    },
+    pkgNavButton: {
+        padding: 4,
+    },
+    pkgDisplay: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#e8f4fc',
+        marginHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#0854a0',
+        gap: 8,
+    },
+    pkgDisplayText: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#0854a0',
+    },
+    pkgItemCount: {
+        backgroundColor: '#0854a0',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 10,
+    },
+    pkgItemCountText: {
+        color: '#fff',
+        fontSize: 10,
+        fontWeight: 'bold',
     },
     searchBarSection: {
         padding: 12,
         backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee',
     },
     searchBar: {
         flexDirection: 'row',
@@ -787,17 +921,15 @@ const styles = StyleSheet.create({
         backgroundColor: '#94a3b8',
     },
     progressBar: {
-        backgroundColor: '#e8f4fc',
-        paddingVertical: 8,
+        backgroundColor: '#f8fafc',
+        paddingVertical: 6,
         paddingHorizontal: 16,
-        borderTopWidth: 1,
         borderBottomWidth: 1,
-        borderColor: '#cce4f6',
+        borderBottomColor: '#eee',
     },
     progressText: {
-        fontSize: 13,
-        color: '#0854a0',
-        fontWeight: '600',
+        fontSize: 12,
+        color: '#64748b',
         textAlign: 'center',
     },
     listContent: {
@@ -858,10 +990,11 @@ const styles = StyleSheet.create({
     },
     qtyRow: {
         flexDirection: 'row',
+        alignItems: 'center',
         gap: 16,
     },
     qtyBox: {
-        flex: 1,
+        minWidth: 70,
     },
     qtyLabel: {
         fontSize: 10,
@@ -870,12 +1003,27 @@ const styles = StyleSheet.create({
         marginBottom: 2,
     },
     qtyValue: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: 'bold',
         color: '#333',
     },
     qtyScanned: {
         color: '#0854a0',
+    },
+    itemPackageInfo: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#f1f5f9',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 6,
+        gap: 4,
+    },
+    itemPackageText: {
+        fontSize: 10,
+        color: '#475569',
+        fontWeight: '500',
     },
     footer: {
         position: 'absolute',
@@ -913,39 +1061,61 @@ const styles = StyleSheet.create({
         width: '100%',
         maxWidth: 340,
     },
+    qtyModalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 16,
+        gap: 8,
+    },
+    qtyModalBadge: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#0854a0',
+        backgroundColor: '#e8f4fc',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 6,
+    },
+    selectedItemBox: {
+        backgroundColor: '#f8fafc',
+        padding: 12,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        marginBottom: 16,
+    },
+    selectedItemCode: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#334155',
+    },
+    selectedItemDesc: {
+        fontSize: 12,
+        color: '#64748b',
+        marginTop: 2,
+    },
     modalTitle: {
         fontSize: 18,
         fontWeight: 'bold',
-        color: '#333',
+        color: '#1e293b',
         marginBottom: 12,
-        textAlign: 'center',
     },
     modalText: {
         fontSize: 14,
-        color: '#666',
+        color: '#64748b',
         marginBottom: 16,
-        textAlign: 'center',
     },
     packagesInput: {
-        backgroundColor: '#f5f5f5',
+        backgroundColor: '#f1f5f9',
         borderWidth: 1,
-        borderColor: '#ddd',
+        borderColor: '#cbd5e1',
         borderRadius: 8,
         padding: 12,
         fontSize: 24,
         textAlign: 'center',
-        color: '#333',
+        color: '#1e293b',
         marginBottom: 20,
-    },
-    manualInput: {
-        backgroundColor: '#f5f5f5',
-        borderWidth: 1,
-        borderColor: '#ddd',
-        borderRadius: 8,
-        padding: 12,
-        fontSize: 18,
-        color: '#333',
-        marginBottom: 20,
+        fontWeight: 'bold',
     },
     modalButtons: {
         flexDirection: 'row',
@@ -958,7 +1128,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     modalButtonSecondary: {
-        backgroundColor: '#f0f0f0',
+        backgroundColor: '#f1f5f9',
     },
     modalButtonPrimary: {
         backgroundColor: '#0854a0',
@@ -967,12 +1137,44 @@ const styles = StyleSheet.create({
         backgroundColor: '#f59e0b',
     },
     modalButtonTextSecondary: {
-        color: '#666',
+        color: '#475569',
         fontWeight: '600',
     },
     modalButtonTextPrimary: {
         color: '#fff',
         fontWeight: 'bold',
+    },
+    // Review Modal Styles
+    reviewList: {
+        marginTop: 10,
+    },
+    reviewItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#eee',
+    },
+    reviewItemCode: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#333',
+    },
+    reviewItemDesc: {
+        fontSize: 11,
+        color: '#666',
+    },
+    reviewItemQty: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#0854a0',
+        marginLeft: 10,
+    },
+    emptyReviewText: {
+        textAlign: 'center',
+        color: '#999',
+        padding: 20,
+        fontStyle: 'italic',
     },
 });
 
