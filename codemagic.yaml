@@ -1,27 +1,26 @@
 workflows:
-  react-native-ios:
-    name: LogixMobile iOS Production
+  ios-build:
+    name: LogixMobile iOS
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
-      node: latest
+      node: 18 # O la versión que estés usando
       xcode: latest
       cocoapods: default
       vars:
         XCODE_WORKSPACE: "ios/LogixMobile.xcworkspace"
         XCODE_SCHEME: "LogixMobile"
     scripts:
-      - name: Install dependencies
+      - name: Instalar dependencias de NPM
         script: |
           npm install
-      - name: Install CocoaPods
+      - name: Instalar pods
         script: |
           cd ios && pod install
-      - name: Build IPA para distribución
+      - name: Compilar archivo .ipa
         script: |
-          # Este comando compila la app. 
-          # Nota: Para una compilación exitosa en la nube, necesitarás configurar 
-          # las llaves de firma (Code Signing) en la interfaz de Codemagic.
+          # Este comando genera el binario. 
+          # Nota: Fallará si no has configurado la firma (Code Signing) en el panel de Codemagic.
           xcode-project build-ipa \
             --workspace "${XCODE_WORKSPACE}" \
             --scheme "${XCODE_SCHEME}"
@@ -30,4 +29,4 @@ workflows:
     publishing:
       email:
         recipients:
-          - tu-correo@ejemplo.com
+          - tu-email@ejemplo.com
