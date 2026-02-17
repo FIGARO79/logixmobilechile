@@ -1,5 +1,5 @@
 import React, { useContext, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Vibration } from 'react-native';
 import { AuthContext } from '../context/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -13,6 +13,7 @@ const LoginScreen = () => {
 
     const handleLogin = async () => {
         if (!username || !password) {
+            Vibration.vibrate([0, 200, 100, 200]);
             setError('Por favor completa todos los campos');
             return;
         }
@@ -20,6 +21,7 @@ const LoginScreen = () => {
         try {
             await login(username, password);
         } catch (e) {
+            Vibration.vibrate([0, 200, 100, 200]);
             setError(e.message || 'Error al iniciar sesión. Verifica tus credenciales.');
         }
     };
@@ -64,7 +66,7 @@ const LoginScreen = () => {
                         >
                             <Icon
                                 name={isPasswordVisible ? "eye-off" : "eye"}
-                                size={24}
+                                size={28}
                                 color="#666"
                             />
                         </TouchableOpacity>
@@ -117,9 +119,9 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#ddd',
         borderRadius: 8,
-        padding: 12,
+        padding: 16,
         fontSize: 16,
-        color: '#000', // Explicit text color
+        color: '#000',
     },
     passwordContainer: {
         flexDirection: 'row',
@@ -131,16 +133,17 @@ const styles = StyleSheet.create({
     },
     passwordInput: {
         flex: 1,
-        padding: 12,
+        padding: 16,
         fontSize: 16,
-        color: '#000', // Explicit text color
+        color: '#000',
     },
     eyeIcon: {
-        padding: 10,
+        padding: 12,
+        paddingRight: 16,
     },
     button: {
         backgroundColor: '#0070d2',
-        padding: 16,
+        padding: 20,
         borderRadius: 8,
         alignItems: 'center',
         marginTop: 20,
@@ -155,20 +158,21 @@ const styles = StyleSheet.create({
     },
     buttonText: {
         color: '#fff',
-        fontSize: 18,
-        fontWeight: '600',
+        fontSize: 20,
+        fontWeight: 'bold',
     },
     errorContainer: {
         backgroundColor: '#fee2e2',
         borderWidth: 1,
         borderColor: '#f87171',
-        padding: 10,
+        padding: 12,
         borderRadius: 6,
         marginBottom: 20,
     },
     errorText: {
         color: '#b91c1c',
         textAlign: 'center',
+        fontWeight: '500',
     },
 });
 

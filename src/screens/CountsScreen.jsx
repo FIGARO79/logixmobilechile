@@ -9,12 +9,14 @@ import {
     ActivityIndicator,
     Alert,
     KeyboardAvoidingView,
-    Platform
+    Platform,
+    Vibration
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import client from '../api/client';
 import ScannerModal from '../components/ScannerModal';
+import useDataWedge from '../hooks/useDataWedge';
 
 // Calendar Icon component
 const CalendarIcon = ({ size = 20, color = '#fff' }) => (
@@ -59,6 +61,10 @@ const CountsScreen = ({ navigation }) => {
     const [itemsWithDiffCount, setItemsWithDiffCount] = useState(0);
     const [isFilteringDifferences, setIsFilteringDifferences] = useState(false);
     const flatListRef = useRef(null);
+    const inputRefs = useRef({});
+
+    // Integración de escáner por hardware (Zebra)
+    useDataWedge(handleScan);
 
     // Load items when date changes
     useEffect(() => {
@@ -135,11 +141,13 @@ const CountsScreen = ({ navigation }) => {
         setScannerOpen(false);
         const cleanCode = code.trim().toUpperCase();
 
-        // Find item in list
-        const index = items.findIndex(i => i.item_code === cleanCode);
+        // Find item in list - trim each item_code for robust matching
+        const index = items.findIndex(i => i.item_code?.toString().trim().toUpperCase() === cleanCode);
 
         if (index !== -1) {
-            Alert.alert('✓ Encontrado', `Item: ${cleanCode}`);
+            // Feedback de éxito (vibración corta)
+            Vibration.vibrate(100);
+
             // Scroll to item
             setTimeout(() => {
                 flatListRef.current?.scrollToIndex({
@@ -147,8 +155,15 @@ const CountsScreen = ({ navigation }) => {
                     animated: true,
                     viewPosition: 0.5
                 });
+                
+                // Focus the input field for the found item after scrolling
+                setTimeout(() => {
+                    inputRefs.current[index]?.focus();
+                }, 400);
             }, 300);
         } else {
+            // Feedback de error (vibración patrón)
+            Vibration.vibrate([0, 200, 100, 200]);
             Alert.alert('No Encontrado', 'El item no está en la lista de hoy');
         }
     };
@@ -252,12 +267,14 @@ const CountsScreen = ({ navigation }) => {
                     <View style={styles.qtySection}>
                         <Text style={styles.fieldLabel}>Cant. Física</Text>
                         <TextInput
+                            ref={el => inputRefs.current[index] = el}
                             style={[styles.qtyInput, isSaved && styles.qtyInputDisabled, item.is_difference && styles.qtyInputDiff]}
                             value={item.physical_qty}
                             onChangeText={(value) => handleCountChange(index, value)}
                             keyboardType="numeric"
                             placeholder="0"
                             editable={!isSaved}
+                            selectTextOnFocus={true}
                         />
                     </View>
                 </View>
@@ -428,11 +445,14 @@ const styles = StyleSheet.create({
         borderBottomColor: '#eee',
     },
     backButton: {
+        paddingVertical: 10,
+        paddingRight: 20,
         marginBottom: 8,
     },
     backText: {
         color: '#0070d2',
         fontSize: 16,
+        fontWeight: '600',
     },
     title: {
         fontSize: 24,

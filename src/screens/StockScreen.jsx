@@ -9,7 +9,8 @@ import {
     ActivityIndicator,
     Alert,
     KeyboardAvoidingView,
-    Platform
+    Platform,
+    Vibration
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
@@ -43,8 +44,9 @@ const StockScreen = ({ navigation }) => {
     useDataWedge(handleScan);
 
     const executeSearch = async (code) => {
-        if (!code.trim()) {
-            Alert.alert('Error', 'Ingresa un código de item');
+        const cleanCode = code?.toString().trim().toUpperCase();
+        if (!cleanCode) {
+            Alert.alert('Error', 'Ingresa un código de ítem');
             return;
         }
 
@@ -53,12 +55,28 @@ const StockScreen = ({ navigation }) => {
         setItemData(null);
 
         try {
-            const response = await client.get(`/api/find_item/${encodeURIComponent(code.trim())}/NA`);
-            setItemData(response.data);
-            setItemCode(''); // Clear input on success
+            // Se limpia el código de posibles espacios ocultos o caracteres de control
+            const sanitizedCode = cleanCode.replace(/[\u0000-\u001F\u007F-\u009F]/g, "");
+            const response = await client.get(`/api/find_item/${encodeURIComponent(sanitizedCode)}/NA`);
+            
+            if (response.data) {
+                setItemData(response.data);
+                setItemCode(''); // Clear input on success
+                Vibration.vibrate(100);
+            } else {
+                throw new Error('No se recibieron datos del servidor');
+            }
         } catch (err) {
-            console.error('Search error:', err);
-            const errorMsg = err.response?.data?.error || err.response?.data?.detail || 'Item no encontrado';
+            console.error('Search error:', err.response?.status, err.response?.data);
+            Vibration.vibrate([0, 200, 100, 200]);
+            
+            let errorMsg = 'Item no encontrado';
+            if (err.response?.status === 404) {
+                errorMsg = `El ítem [${cleanCode}] no existe en el sistema.`;
+            } else if (err.response?.data?.error || err.response?.data?.detail) {
+                errorMsg = err.response.data.error || err.response.data.detail;
+            }
+            
             setError(errorMsg);
             Alert.alert('Error', errorMsg);
         } finally {
@@ -257,11 +275,14 @@ const styles = StyleSheet.create({
         borderBottomColor: '#eee',
     },
     backButton: {
+        paddingVertical: 10,
+        paddingRight: 20,
         marginBottom: 8,
     },
     backText: {
         color: '#0070d2',
         fontSize: 16,
+        fontWeight: '600',
     },
     title: {
         fontSize: 24,
@@ -301,9 +322,10 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#ddd',
         borderRadius: 8,
-        padding: 12,
+        padding: 16,
         fontSize: 16,
         marginBottom: 16,
+        color: '#000',
     },
     buttonRow: {
         flexDirection: 'row',
@@ -311,7 +333,7 @@ const styles = StyleSheet.create({
     },
     button: {
         flex: 1,
-        padding: 14,
+        padding: 16,
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
@@ -321,7 +343,7 @@ const styles = StyleSheet.create({
     },
     buttonScan: {
         backgroundColor: '#354a5f',
-        width: 50,
+        width: 60,
         flex: 0,
     },
     buttonFlex: {
@@ -335,11 +357,12 @@ const styles = StyleSheet.create({
     buttonText: {
         color: '#fff',
         fontSize: 16,
-        fontWeight: '600',
+        fontWeight: 'bold',
     },
     buttonSecondaryText: {
         color: '#666',
         fontSize: 16,
+        fontWeight: '600',
     },
     resultHeader: {
         flexDirection: 'row',
@@ -348,9 +371,10 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     itemCode: {
-        fontSize: 18,
+        fontSize: 20,
         fontWeight: 'bold',
-        color: '#333',
+        color: '#0854a0',
+        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     badge: {
         paddingHorizontal: 10,
@@ -395,31 +419,32 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     locationBadge: {
-        backgroundColor: '#dbeafe',
+        backgroundColor: '#f3f4f6',
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 6,
         alignSelf: 'flex-start',
         borderWidth: 1,
-        borderColor: '#93c5fd',
+        borderColor: '#d1d5db',
     },
     locationText: {
-        color: '#1e40af',
+        color: '#333',
         fontSize: 16,
-        fontWeight: '600',
+        fontWeight: 'bold',
+        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     qtyBadge: {
-        backgroundColor: '#dbeafe',
+        backgroundColor: '#e8f4fc',
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 6,
         alignSelf: 'flex-start',
         borderWidth: 1,
-        borderColor: '#93c5fd',
+        borderColor: '#0854a0',
     },
     qtyText: {
-        color: '#1e40af',
-        fontSize: 18,
+        color: '#0854a0',
+        fontSize: 20,
         fontWeight: 'bold',
     },
     additionalBinsRow: {
@@ -428,16 +453,17 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     additionalBinBadge: {
-        backgroundColor: '#e0f2fe',
+        backgroundColor: '#f1f5f9',
         paddingHorizontal: 10,
         paddingVertical: 4,
         borderRadius: 4,
         borderWidth: 1,
-        borderColor: '#7dd3fc',
+        borderColor: '#cbd5e1',
     },
     additionalBinText: {
-        color: '#0369a1',
+        color: '#475569',
         fontSize: 14,
+        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     divider: {
         height: 1,

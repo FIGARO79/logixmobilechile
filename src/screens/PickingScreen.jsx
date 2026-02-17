@@ -160,7 +160,10 @@ const PickingScreen = ({ navigation }) => {
             Vibration.vibrate(50);
         } else {
             Vibration.vibrate([0, 200, 100, 200]);
-            Alert.alert('✗ No encontrado', `Item NO pertenece al pedido: ${cleanCode}`);
+            Alert.alert(
+                '✗ Ítem Incorrecto',
+                `El ítem escaneado [${cleanCode}] NO pertenece al pedido actual [${orderNumber}].`
+            );
         }
     };
 
