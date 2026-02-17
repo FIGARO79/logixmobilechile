@@ -145,22 +145,22 @@ const StockScreen = ({ navigation }) => {
                             </TouchableOpacity>
 
                             <TouchableOpacity
-                                style={[styles.button, styles.buttonPrimary, styles.buttonFlex]}
+                                style={[styles.button, styles.buttonPrimary, styles.buttonFlexConsult]}
                                 onPress={handleSearch}
                                 disabled={loading}
                             >
                                 {loading ? (
                                     <ActivityIndicator color="#fff" size="small" />
                                 ) : (
-                                    <Text style={styles.buttonText}>Consultar</Text>
+                                    <Text style={styles.buttonText} numberOfLines={1}>Consultar</Text>
                                 )}
                             </TouchableOpacity>
 
                             <TouchableOpacity
-                                style={[styles.button, styles.buttonSecondary]}
+                                style={[styles.button, styles.buttonSecondary, styles.buttonFlexClear]}
                                 onPress={clearSearch}
                             >
-                                <Text style={styles.buttonSecondaryText}>Limpiar</Text>
+                                <Text style={styles.buttonSecondaryText} numberOfLines={1}>Limpiar</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -345,7 +345,8 @@ const styles = StyleSheet.create({
     },
     button: {
         flex: 1,
-        padding: 16,
+        paddingVertical: 16,
+        paddingHorizontal: 8,
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
@@ -358,8 +359,11 @@ const styles = StyleSheet.create({
         width: 60,
         flex: 0,
     },
-    buttonFlex: {
-        flex: 2,
+    buttonFlexConsult: {
+        flex: 1.5,
+    },
+    buttonFlexClear: {
+        flex: 1,
     },
     buttonSecondary: {
         backgroundColor: '#f0f0f0',
