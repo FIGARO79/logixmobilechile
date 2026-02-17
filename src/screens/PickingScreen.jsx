@@ -458,7 +458,10 @@ const PickingScreen = ({ navigation }) => {
                 <Modal visible={showReviewModal} transparent animationType="slide">
                     <View style={styles.modalOverlay}>
                         <View style={[styles.modalContent, { maxHeight: '80%' }]}>
-                            <Text style={styles.modalTitle}>📦 Contenido del Bulto {currentPackage}</Text>
+                            <View style={styles.modalHeaderRow}>
+                                <Icon name="package-variant-closed" size={24} color="#1e293b" />
+                                <Text style={styles.modalTitle}>Contenido del Bulto {currentPackage}</Text>
+                            </View>
                             <ScrollView style={styles.reviewList}>
                                 {pkgItems.length === 0 ? (
                                     <Text style={styles.emptyReviewText}>Este bulto está vacío</Text>
@@ -492,7 +495,10 @@ const PickingScreen = ({ navigation }) => {
                                 <Icon name="package-variant-closed" size={24} color="#0854a0" />
                                 <Text style={styles.qtyModalBadge}>Asignando al Bulto {currentPackage}</Text>
                             </View>
-                            <Text style={styles.modalTitle}>🔢 Ingresar Cantidad</Text>
+                            <View style={styles.modalHeaderRow}>
+                                <Icon name="numeric" size={24} color="#1e293b" />
+                                <Text style={styles.modalTitle}>Ingresar Cantidad</Text>
+                            </View>
                             <View style={styles.selectedItemBox}>
                                 <Text style={styles.selectedItemCode}>{selectedItem?.code}</Text>
                                 <Text style={styles.selectedItemDesc} numberOfLines={1}>{selectedItem?.description}</Text>
@@ -531,7 +537,10 @@ const PickingScreen = ({ navigation }) => {
                 <Modal visible={showDiffModal} transparent animationType="fade">
                     <View style={styles.modalOverlay}>
                         <View style={styles.modalContent}>
-                            <Text style={styles.modalTitle}>⚠️ Diferencias Detectadas</Text>
+                            <View style={styles.modalHeaderRow}>
+                                <Icon name="alert-octagon" size={24} color="#b91c1c" />
+                                <Text style={[styles.modalTitle, { color: '#b91c1c' }]}>Diferencias Detectadas</Text>
+                            </View>
                             <Text style={styles.modalText}>
                                 Hay ítems con cantidades incompletas o en exceso. ¿Desea finalizar de todas formas?
                             </Text>
@@ -560,7 +569,10 @@ const PickingScreen = ({ navigation }) => {
                 <Modal visible={showPackagesModal} transparent animationType="fade">
                     <View style={styles.modalOverlay}>
                         <View style={styles.modalContent}>
-                            <Text style={styles.modalTitle}>📦 Confirmar Total de Bultos</Text>
+                            <View style={styles.modalHeaderRow}>
+                                <Icon name="package-variant" size={24} color="#1e293b" />
+                                <Text style={styles.modalTitle}>Confirmar Total de Bultos</Text>
+                            </View>
                             <Text style={styles.modalText}>Se han detectado {packagesCount} bultos utilizados. Confirme el total:</Text>
                             <TextInput
                                 style={styles.packagesInput}

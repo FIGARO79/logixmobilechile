@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
 import ScannerModal from '../components/ScannerModal';
 import useDataWedge from '../hooks/useDataWedge';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Custom QR Icon component
 const QrIcon = ({ size = 20, color = '#fff' }) => (
@@ -70,7 +71,7 @@ const StockScreen = ({ navigation }) => {
             console.error('Search error:', err.response?.status, err.response?.data);
             Vibration.vibrate([0, 200, 100, 200]);
             
-            let errorMsg = 'Item no encontrado';
+            let errorMsg = 'Ítem no encontrado';
             if (err.response?.status === 404) {
                 errorMsg = `El ítem [${cleanCode}] no existe en el sistema.`;
             } else if (err.response?.data?.error || err.response?.data?.detail) {
@@ -78,7 +79,7 @@ const StockScreen = ({ navigation }) => {
             }
             
             setError(errorMsg);
-            Alert.alert('Error', errorMsg);
+            Alert.alert('Sin Resultados', errorMsg);
         } finally {
             setLoading(false);
         }
@@ -119,9 +120,12 @@ const StockScreen = ({ navigation }) => {
                 <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
                     {/* Search Card */}
                     <View style={styles.card}>
-                        <Text style={styles.cardHeader}>Búsqueda de Stock</Text>
+                        <View style={styles.cardHeaderRow}>
+                            <Icon name="magnify" size={20} color="#333" />
+                            <Text style={styles.cardHeader}>Búsqueda de Stock</Text>
+                        </View>
 
-                        <Text style={styles.label}>Código de Item</Text>
+                        <Text style={styles.label}>Código de Ítem</Text>
                         <TextInput
                             style={styles.input}
                             value={itemCode}
@@ -165,7 +169,10 @@ const StockScreen = ({ navigation }) => {
                     {itemData && (
                         <View style={styles.card}>
                             <View style={styles.resultHeader}>
-                                <Text style={styles.itemCode}>{itemData.itemCode}</Text>
+                                <View style={styles.itemCodeRow}>
+                                    <Icon name="barcode-scan" size={22} color="#0854a0" />
+                                    <Text style={styles.itemCode}>{itemData.itemCode}</Text>
+                                </View>
                                 <View style={[styles.badge, hasStock ? styles.badgeGreen : styles.badgeRed]}>
                                     <Text style={[styles.badgeText, hasStock ? styles.badgeTextGreen : styles.badgeTextRed]}>
                                         {hasStock ? 'EN STOCK' : 'SIN STOCK'}
@@ -241,9 +248,9 @@ const StockScreen = ({ navigation }) => {
                     {/* Empty State */}
                     {!itemData && !error && !loading && (
                         <View style={styles.emptyState}>
-                            <Text style={styles.emptyIcon}>📦</Text>
+                            <Icon name="database-search" size={60} color="#e5e7eb" />
                             <Text style={styles.emptyText}>
-                                Ingresa un código de item para consultar su disponibilidad y ubicación.
+                                Ingresa un código de ítem para consultar su disponibilidad y ubicación.
                             </Text>
                         </View>
                     )}
@@ -306,11 +313,16 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#e0e0e0',
     },
+    cardHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 16,
+    },
     cardHeader: {
         fontSize: 16,
         fontWeight: '600',
         color: '#333',
-        marginBottom: 16,
     },
     label: {
         fontSize: 14,
@@ -369,6 +381,11 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: 16,
+    },
+    itemCodeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
     },
     itemCode: {
         fontSize: 20,
@@ -500,6 +517,7 @@ const styles = StyleSheet.create({
         color: '#888',
         textAlign: 'center',
         paddingHorizontal: 40,
+        marginTop: 16,
     },
 });
 
