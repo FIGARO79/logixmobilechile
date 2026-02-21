@@ -6,7 +6,9 @@ import {
     TouchableOpacity,
     Modal,
     ActivityIndicator,
-    Vibration
+    Vibration,
+    Animated,
+    Easing
 } from 'react-native';
 import {
     Camera,
@@ -23,6 +25,35 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
     const cameraRef = useRef(null);
     const device = useCameraDevice('back');
     const lastScanTime = useRef(0);
+    const animValue = useRef(new Animated.Value(0)).current;
+
+    // Animación de barrido del láser
+    useEffect(() => {
+        if (visible && isActive) {
+            const startAnimation = () => {
+                animValue.setValue(0);
+                Animated.loop(
+                    Animated.sequence([
+                        Animated.timing(animValue, {
+                            toValue: 1,
+                            duration: 2000,
+                            easing: Easing.inOut(Easing.quad),
+                            useNativeDriver: true,
+                        }),
+                        Animated.timing(animValue, {
+                            toValue: 0,
+                            duration: 2000,
+                            easing: Easing.inOut(Easing.quad),
+                            useNativeDriver: true,
+                        }),
+                    ])
+                ).start();
+            };
+            startAnimation();
+        } else {
+            animValue.stopAnimation();
+        }
+    }, [visible, isActive, animValue]);
 
     // Activar/desactivar la cámara según la visibilidad del modal
     useEffect(() => {
@@ -36,6 +67,11 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
             setIsActive(false);
         }
     }, [visible, hasPermission, requestPermission]);
+
+    const translateY = animValue.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-85, 85], // Mover dentro del cuadro de 180px de alto
+    });
 
     const codeScanner = useCodeScanner({
         codeTypes: ['code-128', 'ean-13', 'qr', 'code-39', 'upc-a'],
@@ -117,8 +153,8 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
                         codeScanner={codeScanner}
                         torch={isFlashOn ? 'on' : 'off'}
                         enableZoomGesture={true}
-                        format={device.formats[0]} // Using default or first format
-                        pixelFormat="yuv" // Standard for MLKit
+                        format={device.formats[0]} 
+                        pixelFormat="yuv" 
                     />
 
                     {/* Professional Overlay */}
@@ -128,7 +164,10 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
                             <View style={[styles.corner, styles.topRight]} />
                             <View style={[styles.corner, styles.bottomLeft]} />
                             <View style={[styles.corner, styles.bottomRight]} />
-                            <View style={styles.laserLine} />
+                            <Animated.View style={[
+                                styles.laserLine, 
+                                { transform: [{ translateY }] }
+                            ]} />
                         </View>
                         <View style={styles.hintContainer}>
                             <Text style={styles.scanHint}>Apunta al código para lectura rápida</Text>
@@ -140,6 +179,134 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
         </Modal>
     );
 };
+
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: '#000',
+    },
+    header: {
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        padding: 16,
+        paddingTop: 48,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        zIndex: 10,
+    },
+    closeButton: {
+        paddingVertical: 5,
+        paddingHorizontal: 10,
+    },
+    closeText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '500',
+    },
+    title: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    flashButton: {
+        padding: 5,
+    },
+    cameraContainer: {
+        flex: 1,
+    },
+    loadingContainer: {
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    loadingText: {
+        color: '#fff',
+        marginTop: 15,
+        fontSize: 16,
+    },
+    closeButtonOverlay: {
+        marginTop: 30,
+        padding: 15,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        borderRadius: 8,
+    },
+    overlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    scanTarget: {
+        width: 280,
+        height: 180,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    corner: {
+        position: 'absolute',
+        width: 30,
+        height: 30,
+        borderColor: '#0070d2',
+    },
+    topLeft: {
+        top: 0,
+        left: 0,
+        borderTopWidth: 4,
+        borderLeftWidth: 4,
+        borderTopLeftRadius: 10,
+    },
+    topRight: {
+        top: 0,
+        right: 0,
+        borderTopWidth: 4,
+        borderRightWidth: 4,
+        borderTopRightRadius: 10,
+    },
+    bottomLeft: {
+        bottom: 0,
+        left: 0,
+        borderBottomWidth: 4,
+        borderLeftWidth: 4,
+        borderBottomLeftRadius: 10,
+    },
+    bottomRight: {
+        bottom: 0,
+        right: 0,
+        borderBottomWidth: 4,
+        borderRightWidth: 4,
+        borderBottomRightRadius: 10,
+    },
+    laserLine: {
+        width: '90%',
+        height: 2,
+        backgroundColor: '#ff0000',
+        shadowColor: '#ff0000',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 1,
+        shadowRadius: 5,
+        elevation: 5,
+    },
+    hintContainer: {
+        marginTop: 40,
+        alignItems: 'center',
+    },
+    scanHint: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '500',
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: 20,
+        overflow: 'hidden',
+    },
+    zoomHint: {
+        color: 'rgba(255,255,255,0.6)',
+        fontSize: 12,
+        marginTop: 10,
+    },
+});
+
+export default ScannerModal;
 
 const styles = StyleSheet.create({
     container: {
