@@ -77,3 +77,7 @@ yarn-error.log
 # Reference VPS code (not part of mobile app)
 logix_react_vps/
 vscode/
+
+# Local/Temp files
+cookies.txt
+android/error.log

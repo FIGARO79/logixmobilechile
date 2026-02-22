@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
     View,
     Text,
@@ -14,7 +14,8 @@ import {
     Camera,
     useCameraDevice,
     useCodeScanner,
-    useCameraPermission
+    useCameraPermission,
+    useCameraFormat
 } from 'react-native-vision-camera';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -23,11 +24,21 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
     const [isFlashOn, setIsFlashOn] = useState(false);
     const [isActive, setIsActive] = useState(false);
     const cameraRef = useRef(null);
+
+    // Buscar dispositivo de cámara trasera
     const device = useCameraDevice('back');
+
+    // Seleccionar el mejor formato para escaneo (priorizar resolución 1080p o 720p para velocidad)
+    const format = useCameraFormat(device, [
+        { videoResolution: { width: 1920, height: 1080 } },
+        { videoResolution: { width: 1280, height: 720 } },
+        { fps: 30 }
+    ]);
+
     const lastScanTime = useRef(0);
     const animValue = useRef(new Animated.Value(0)).current;
 
-    // Animación de barrido del láser
+    // Animación del láser
     useEffect(() => {
         if (visible && isActive) {
             const startAnimation = () => {
@@ -36,13 +47,13 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
                     Animated.sequence([
                         Animated.timing(animValue, {
                             toValue: 1,
-                            duration: 2000,
+                            duration: 1800,
                             easing: Easing.inOut(Easing.quad),
                             useNativeDriver: true,
                         }),
                         Animated.timing(animValue, {
                             toValue: 0,
-                            duration: 2000,
+                            duration: 1800,
                             easing: Easing.inOut(Easing.quad),
                             useNativeDriver: true,
                         }),
@@ -53,68 +64,59 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
         } else {
             animValue.stopAnimation();
         }
-    }, [visible, isActive, animValue]);
+    }, [visible, isActive]);
 
-    // Activar/desactivar la cámara según la visibilidad del modal
+    // Gestión de permisos y estado activo
     useEffect(() => {
+        let timeout;
         if (visible) {
+            console.log('[Scanner] Intentando activar cámara...');
             if (!hasPermission) {
-                requestPermission();
+                requestPermission().then(granted => {
+                    console.log('[Scanner] Permiso otorgado:', granted);
+                });
             }
-            setIsActive(true);
-            setIsFlashOn(false);
+            // Retraso para evitar parpadeo o bloqueo al abrir el modal
+            timeout = setTimeout(() => setIsActive(true), 500);
         } else {
             setIsActive(false);
+            setIsFlashOn(false);
         }
-    }, [visible, hasPermission, requestPermission]);
+        return () => clearTimeout(timeout);
+    }, [visible, hasPermission]);
 
     const translateY = animValue.interpolate({
         inputRange: [0, 1],
-        outputRange: [-85, 85], // Mover dentro del cuadro de 180px de alto
+        outputRange: [-90, 90],
     });
 
     const codeScanner = useCodeScanner({
         codeTypes: ['code-128', 'ean-13', 'qr', 'code-39', 'upc-a'],
         onCodeScanned: (codes) => {
-            const currentTime = Date.now();
-            if (currentTime - lastScanTime.current < 1500) return;
+            const now = Date.now();
+            if (now - lastScanTime.current < 2000) return;
 
-            if (codes && codes.length > 0 && codes[0].value) {
-                lastScanTime.current = currentTime;
-                console.log('[DEBUG] Code detected (Vision):', codes[0].value);
+            if (codes.length > 0 && codes[0].value) {
+                lastScanTime.current = now;
+                console.log('[Scanner] Lectura exitosa:', codes[0].value);
                 Vibration.vibrate(100);
                 onScan(codes[0].value);
             }
         },
     });
 
-    const toggleFlash = () => {
-        setIsFlashOn((prev) => !prev);
-    };
-
     if (!visible) return null;
 
-    if (!hasPermission) {
-        return (
-            <Modal visible={visible} transparent animationType="fade">
-                <View style={[styles.container, styles.loadingContainer]}>
-                    <ActivityIndicator size="large" color="#0854a0" />
-                    <Text style={styles.loadingText}>Solicitando permisos...</Text>
-                    <TouchableOpacity onPress={onClose} style={styles.closeButtonOverlay}>
-                        <Text style={styles.closeText}>Cancelar</Text>
-                    </TouchableOpacity>
-                </View>
-            </Modal>
-        );
-    }
-
-    if (!device) {
+    if (!hasPermission || !device) {
         return (
             <Modal visible={visible} transparent>
-                <View style={[styles.container, styles.loadingContainer]}>
-                    <Text style={styles.loadingText}>No se detectó cámara trasera</Text>
-                    <TouchableOpacity onPress={onClose} style={styles.closeButtonOverlay}>
-                        <Text style={styles.closeText}>Cerrar</Text>
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color="#0070d2" />
+                    <Text style={styles.loadingText}>
+                        {!device ? 'Buscando hardware de cámara...' : 'Solicitando acceso a la cámara...'}
+                    </Text>
+                    <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+                        <Text style={styles.closeBtnText}>Cerrar</Text>
                     </TouchableOpacity>
                 </View>
             </Modal>
@@ -122,56 +124,57 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
     }
 
     return (
-        <Modal
-            visible={visible}
-            animationType="slide"
-            onRequestClose={onClose}
-        >
+        <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
             <View style={styles.container}>
-                {/* Header */}
+                {/* Header con Controles */}
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                        <Text style={styles.closeText}>✕ Cerrar</Text>
+                    <TouchableOpacity onPress={onClose} style={styles.iconBtn}>
+                        <Icon name="close" size={28} color="#fff" />
                     </TouchableOpacity>
-                    <Text style={styles.title}>Escaneo de Alta Precisión</Text>
-                    <TouchableOpacity onPress={toggleFlash} style={styles.flashButton}>
+                    <Text style={styles.headerTitle}>LOGIX SCANNER</Text>
+                    <TouchableOpacity
+                        onPress={() => setIsFlashOn(!isFlashOn)}
+                        style={styles.iconBtn}
+                    >
                         <Icon
                             name={isFlashOn ? "flash" : "flash-off"}
-                            size={26}
+                            size={28}
                             color={isFlashOn ? "#FFD700" : "#fff"}
                         />
                     </TouchableOpacity>
                 </View>
 
-                {/* Camera View */}
-                <View style={styles.cameraContainer}>
+                {/* Vista de Cámara */}
+                <View style={styles.cameraWrapper}>
                     <Camera
                         ref={cameraRef}
                         style={StyleSheet.absoluteFill}
                         device={device}
                         isActive={isActive}
                         codeScanner={codeScanner}
+                        format={format}
                         torch={isFlashOn ? 'on' : 'off'}
                         enableZoomGesture={true}
-                        format={device.formats[0]} 
-                        pixelFormat="yuv" 
+                        pixelFormat="yuv"
+                        lowLightBoost={device.supportsLowLightBoost}
                     />
 
-                    {/* Professional Overlay */}
+                    {/* Guía Visual */}
                     <View style={styles.overlay}>
-                        <View style={styles.scanTarget}>
-                            <View style={[styles.corner, styles.topLeft]} />
-                            <View style={[styles.corner, styles.topRight]} />
-                            <View style={[styles.corner, styles.bottomLeft]} />
-                            <View style={[styles.corner, styles.bottomRight]} />
+                        <View style={styles.targetFrame}>
+                            <View style={[styles.border, styles.borderTL]} />
+                            <View style={[styles.border, styles.borderTR]} />
+                            <View style={[styles.border, styles.borderBL]} />
+                            <View style={[styles.border, styles.borderBR]} />
+
                             <Animated.View style={[
-                                styles.laserLine, 
+                                styles.laser,
                                 { transform: [{ translateY }] }
                             ]} />
                         </View>
-                        <View style={styles.hintContainer}>
-                            <Text style={styles.scanHint}>Apunta al código para lectura rápida</Text>
-                            <Text style={styles.zoomHint}>Usa dos dedos para hacer zoom</Text>
+
+                        <View style={styles.infoBox}>
+                            <Text style={styles.infoText}>Enfoque el código de barras</Text>
                         </View>
                     </View>
                 </View>
@@ -181,256 +184,59 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#000',
-    },
+    container: { flex: 1, backgroundColor: '#000' },
     header: {
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        padding: 16,
-        paddingTop: 48,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        zIndex: 10,
+        paddingTop: 50,
+        paddingBottom: 20,
+        paddingHorizontal: 20,
+        backgroundColor: 'rgba(0,0,0,0.95)',
+        zIndex: 10
     },
-    closeButton: {
-        paddingVertical: 5,
-        paddingHorizontal: 10,
-    },
-    closeText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '500',
-    },
-    title: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: 'bold',
-    },
-    flashButton: {
-        padding: 5,
-    },
-    cameraContainer: {
-        flex: 1,
-    },
+    headerTitle: { color: '#fff', fontSize: 16, fontWeight: 'bold', letterSpacing: 1 },
+    iconBtn: { width: 45, height: 45, justifyContent: 'center', alignItems: 'center' },
+    cameraWrapper: { flex: 1 },
     loadingContainer: {
+        flex: 1,
+        backgroundColor: '#000',
         justifyContent: 'center',
         alignItems: 'center',
+        padding: 30
     },
-    loadingText: {
-        color: '#fff',
-        marginTop: 15,
-        fontSize: 16,
-    },
-    closeButtonOverlay: {
-        marginTop: 30,
-        padding: 15,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        borderRadius: 8,
-    },
+    loadingText: { color: '#fff', marginTop: 20, textAlign: 'center', fontSize: 15 },
+    closeBtn: { marginTop: 30, padding: 15, backgroundColor: '#333', borderRadius: 10 },
+    closeBtnText: { color: '#fff', fontWeight: 'bold' },
     overlay: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.4)',
         justifyContent: 'center',
-        alignItems: 'center',
+        alignItems: 'center'
     },
-    scanTarget: {
-        width: 280,
-        height: 180,
+    targetFrame: {
+        width: 300,
+        height: 200,
         justifyContent: 'center',
-        alignItems: 'center',
+        alignItems: 'center'
     },
-    corner: {
-        position: 'absolute',
-        width: 30,
-        height: 30,
-        borderColor: '#0070d2',
-    },
-    topLeft: {
-        top: 0,
-        left: 0,
-        borderTopWidth: 4,
-        borderLeftWidth: 4,
-        borderTopLeftRadius: 10,
-    },
-    topRight: {
-        top: 0,
-        right: 0,
-        borderTopWidth: 4,
-        borderRightWidth: 4,
-        borderTopRightRadius: 10,
-    },
-    bottomLeft: {
-        bottom: 0,
-        left: 0,
-        borderBottomWidth: 4,
-        borderLeftWidth: 4,
-        borderBottomLeftRadius: 10,
-    },
-    bottomRight: {
-        bottom: 0,
-        right: 0,
-        borderBottomWidth: 4,
-        borderRightWidth: 4,
-        borderBottomRightRadius: 10,
-    },
-    laserLine: {
-        width: '90%',
+    border: { position: 'absolute', width: 40, height: 40, borderColor: '#0070d2' },
+    borderTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 15 },
+    borderTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 15 },
+    borderBL: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 15 },
+    borderBR: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4, borderBottomRightRadius: 15 },
+    laser: {
+        width: '94%',
         height: 2,
-        backgroundColor: '#ff0000',
-        shadowColor: '#ff0000',
+        backgroundColor: '#ff3b30',
+        shadowColor: '#ff3b30',
         shadowOffset: { width: 0, height: 0 },
         shadowOpacity: 1,
-        shadowRadius: 5,
-        elevation: 5,
+        shadowRadius: 8,
+        elevation: 8
     },
-    hintContainer: {
-        marginTop: 40,
-        alignItems: 'center',
-    },
-    scanHint: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: '500',
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-        overflow: 'hidden',
-    },
-    zoomHint: {
-        color: 'rgba(255,255,255,0.6)',
-        fontSize: 12,
-        marginTop: 10,
-    },
-});
-
-export default ScannerModal;
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#000',
-    },
-    header: {
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        padding: 16,
-        paddingTop: 48,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        zIndex: 10,
-    },
-    closeButton: {
-        paddingVertical: 5,
-        paddingHorizontal: 10,
-    },
-    closeText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '500',
-    },
-    title: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: 'bold',
-    },
-    flashButton: {
-        padding: 5,
-    },
-    cameraContainer: {
-        flex: 1,
-    },
-    loadingContainer: {
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    loadingText: {
-        color: '#fff',
-        marginTop: 15,
-        fontSize: 16,
-    },
-    closeButtonOverlay: {
-        marginTop: 30,
-        padding: 15,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        borderRadius: 8,
-    },
-    overlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    scanTarget: {
-        width: 280,
-        height: 180,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    corner: {
-        position: 'absolute',
-        width: 30,
-        height: 30,
-        borderColor: '#0070d2',
-    },
-    topLeft: {
-        top: 0,
-        left: 0,
-        borderTopWidth: 4,
-        borderLeftWidth: 4,
-        borderTopLeftRadius: 10,
-    },
-    topRight: {
-        top: 0,
-        right: 0,
-        borderTopWidth: 4,
-        borderRightWidth: 4,
-        borderTopRightRadius: 10,
-    },
-    bottomLeft: {
-        bottom: 0,
-        left: 0,
-        borderBottomWidth: 4,
-        borderLeftWidth: 4,
-        borderBottomLeftRadius: 10,
-    },
-    bottomRight: {
-        bottom: 0,
-        right: 0,
-        borderBottomWidth: 4,
-        borderRightWidth: 4,
-        borderBottomRightRadius: 10,
-    },
-    laserLine: {
-        width: '90%',
-        height: 2,
-        backgroundColor: 'rgba(255, 0, 0, 0.5)',
-        shadowColor: '#ff0000',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 1,
-        shadowRadius: 5,
-    },
-    hintContainer: {
-        marginTop: 40,
-        alignItems: 'center',
-    },
-    scanHint: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: '500',
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-        overflow: 'hidden',
-    },
-    zoomHint: {
-        color: 'rgba(255,255,255,0.6)',
-        fontSize: 12,
-        marginTop: 10,
-    },
+    infoBox: { marginTop: 60, backgroundColor: 'rgba(0,112,210,0.9)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
+    infoText: { color: '#fff', fontWeight: 'bold', fontSize: 14 }
 });
 
 export default ScannerModal;
