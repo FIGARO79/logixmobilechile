@@ -131,7 +131,7 @@ const ScannerModal = ({ visible, onScan, onClose }) => {
                     <TouchableOpacity onPress={onClose} style={styles.iconBtn}>
                         <Icon name="close" size={28} color="#fff" />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>LOGIX SCANNER</Text>
+                    <View style={{ flex: 1 }} />
                     <TouchableOpacity
                         onPress={() => setIsFlashOn(!isFlashOn)}
                         style={styles.iconBtn}

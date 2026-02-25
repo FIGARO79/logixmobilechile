@@ -237,120 +237,13 @@ const InboundScreen = ({ navigation }) => {
                     <View style={styles.logDetail}>
                         <Text style={styles.logLabel}>DIF</Text>
                         <Text style={[styles.logValueBold, logDiff < 0 && styles.diffNegative, logDiff > 0 && styles.diffPositive]}>
-                            {logDiff > 0 ? `+${logDiff}` : logDiff}
+                            {logDiff > 0 ? `+${diff}` : logDiff}
                         </Text>
                     </View>
                 </View>
             </View>
         );
     };
-
-    const ListHeader = () => (
-        <View style={styles.formCard}>
-            <View style={styles.row}>
-                <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.inputLabel}>Import Reference</Text>
-                    <TextInput
-                        style={[styles.input, editId && styles.inputDisabled, styles.monoText]}
-                        value={importRef}
-                        onChangeText={t => setImportRef(t.toUpperCase())}
-                        placeholder="I.R."
-                        editable={!editId}
-                        keyboardType="numeric"
-                    />
-                </View>
-                <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.inputLabel}>Waybill</Text>
-                    <TextInput
-                        style={[styles.input, styles.monoText]}
-                        value={waybill}
-                        onChangeText={t => setWaybill(t.toUpperCase())}
-                        placeholder="W.B."
-                    />
-                </View>
-            </View>
-
-            <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Item Code</Text>
-                <View style={styles.row}>
-                    <TextInput
-                        style={[styles.input, { flex: 1 }, editId && styles.inputDisabled, styles.monoText]}
-                        value={itemCode}
-                        onChangeText={t => setItemCode(t.toUpperCase())}
-                        placeholder="Escanear o escribir"
-                        editable={!editId}
-                        onSubmitEditing={() => findItem()}
-                    />
-                    {!editId && (
-                        <>
-                            <TouchableOpacity style={styles.iconButton} onPress={() => setScannerOpen(true)}>
-                                <QrIcon size={24} color="#fff" />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={[styles.iconButton, styles.searchButton]} onPress={() => findItem()} disabled={loading}>
-                                {loading ? <ActivityIndicator color="#fff" size="small" /> : <Icon name="magnify" size={24} color="#fff" />}
-                            </TouchableOpacity>
-                        </>
-                    )}
-                </View>
-            </View>
-
-            {itemData && (
-                <View style={styles.itemDetails}>
-                    <Text style={styles.itemDescription}>{itemData.description}</Text>
-                    <View style={styles.row}>
-                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Bin Original</Text><Text style={[styles.detailValue, styles.monoText]}>{itemData.binLocation || 'N/A'}</Text></View>
-                        <View style={styles.detailBox}><Text style={styles.detailLabel}>ABC</Text><Text style={styles.detailValue}>{itemData.itemType || 'N/A'}</Text></View>
-                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Qty GRN</Text><Text style={styles.detailValue}>{itemData.defaultQtyGrn || 0}</Text></View>
-                    </View>
-                </View>
-            )}
-
-            <View style={styles.row}>
-                <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.inputLabel}>Qty Received</Text>
-                    <TextInput ref={quantityRef} style={styles.input} value={quantity} onChangeText={setQuantity} keyboardType="numeric" placeholder="0" />
-                </View>
-                <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.inputLabel}>Relocate Bin (Opc.)</Text>
-                    <TextInput style={[styles.input, styles.monoText]} value={relocatedBin} onChangeText={t => setRelocatedBin(t.toUpperCase())} placeholder="Nuevo bin" />
-                </View>
-            </View>
-
-            {itemData && (
-                <View style={styles.summaryBox}>
-                    <View style={styles.summaryItem}><Text style={styles.summaryLabel}>Recibido</Text><Text style={styles.summaryValue}>{quantity || 0}</Text></View>
-                    <View style={styles.summaryItem}><Text style={styles.summaryLabel}>Esperado</Text><Text style={styles.summaryValue}>{itemData.defaultQtyGrn || 0}</Text></View>
-                    <View style={styles.summaryItem}>
-                        <Text style={styles.summaryLabel}>Diferencia</Text>
-                        <Text style={[styles.summaryValue, styles.summaryValueBold, diff < 0 && styles.diffNegative, diff > 0 && styles.diffPositive]}>
-                            {diff > 0 ? `+${diff}` : diff}
-                        </Text>
-                    </View>
-                </View>
-            )}
-
-            <View style={styles.row}>
-                <TouchableOpacity style={[styles.saveButton, !itemData && styles.buttonDisabled]} onPress={handleSaveLog} disabled={saving || !itemData}>
-                    {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveButtonText}>{editId ? 'Guardar Cambios' : 'Añadir Registro'}</Text>}
-                </TouchableOpacity>
-                {editId && <TouchableOpacity style={styles.cancelButton} onPress={resetForm}><Text style={styles.cancelButtonText}>Cancelar</Text></TouchableOpacity>}
-            </View>
-
-            <View style={styles.divider} />
-            
-            <TouchableOpacity style={styles.logsToggle} onPress={toggleLogs}>
-                <View style={styles.rowCentered}>
-                    <Icon name={logsExpanded ? "chevron-down" : "chevron-right"} size={24} color="#333" />
-                    <Text style={styles.logsSectionTitle}>Últimos Registros {logs.length > 0 ? `(${logs.length})` : ''}</Text>
-                </View>
-                {logsExpanded && (
-                    <TouchableOpacity onPress={() => loadLogs(true)}>
-                        <Icon name="refresh" size={20} color="#0854a0" />
-                    </TouchableOpacity>
-                )}
-            </TouchableOpacity>
-        </View>
-    );
 
     return (
         <SafeAreaView style={styles.container}>
@@ -364,7 +257,115 @@ const InboundScreen = ({ navigation }) => {
                     data={logsExpanded ? logs : []}
                     renderItem={renderLog}
                     keyExtractor={item => item.id.toString()}
-                    ListHeaderComponent={ListHeader}
+                    ListHeaderComponent={
+                        <View style={styles.formCard}>
+                            <View style={styles.row}>
+                                <View style={[styles.inputGroup, { flex: 1 }]}>
+                                    <Text style={styles.inputLabel}>Import Reference</Text>
+                                    <TextInput
+                                        style={[styles.input, editId && styles.inputDisabled, styles.monoText]}
+                                        value={importRef}
+                                        onChangeText={t => setImportRef(t.toUpperCase())}
+                                        placeholder="I.R."
+                                        editable={!editId}
+                                        keyboardType="numeric"
+                                        blurOnSubmit={false}
+                                    />
+                                </View>
+                                <View style={[styles.inputGroup, { flex: 1 }]}>
+                                    <Text style={styles.inputLabel}>Waybill</Text>
+                                    <TextInput
+                                        style={[styles.input, styles.monoText]}
+                                        value={waybill}
+                                        onChangeText={t => setWaybill(t.toUpperCase())}
+                                        placeholder="W.B."
+                                        blurOnSubmit={false}
+                                    />
+                                </View>
+                            </View>
+
+                            <View style={styles.inputGroup}>
+                                <Text style={styles.inputLabel}>Item Code</Text>
+                                <View style={styles.row}>
+                                    <TextInput
+                                        style={[styles.input, { flex: 1 }, editId && styles.inputDisabled, styles.monoText]}
+                                        value={itemCode}
+                                        onChangeText={t => setItemCode(t.toUpperCase())}
+                                        placeholder="Escanear o escribir"
+                                        editable={!editId}
+                                        onSubmitEditing={() => findItem()}
+                                        blurOnSubmit={false}
+                                    />
+                                    {!editId && (
+                                        <>
+                                            <TouchableOpacity style={styles.iconButton} onPress={() => setScannerOpen(true)}>
+                                                <QrIcon size={24} color="#fff" />
+                                            </TouchableOpacity>
+                                            <TouchableOpacity style={[styles.iconButton, styles.searchButton]} onPress={() => findItem()} disabled={loading}>
+                                                {loading ? <ActivityIndicator color="#fff" size="small" /> : <Icon name="magnify" size={24} color="#fff" />}
+                                            </TouchableOpacity>
+                                        </>
+                                    )}
+                                </View>
+                            </View>
+
+                            {itemData && (
+                                <View style={styles.itemDetails}>
+                                    <Text style={styles.itemDescription}>{itemData.description}</Text>
+                                    <View style={styles.row}>
+                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Bin Original</Text><Text style={[styles.detailValue, styles.monoText]}>{itemData.binLocation || 'N/A'}</Text></View>
+                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>ABC</Text><Text style={styles.detailValue}>{itemData.itemType || 'N/A'}</Text></View>
+                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Qty GRN</Text><Text style={styles.detailValue}>{itemData.defaultQtyGrn || 0}</Text></View>
+                                    </View>
+                                </View>
+                            )}
+
+                            <View style={styles.row}>
+                                <View style={[styles.inputGroup, { flex: 1 }]}>
+                                    <Text style={styles.inputLabel}>Qty Received</Text>
+                                    <TextInput ref={quantityRef} style={styles.input} value={quantity} onChangeText={setQuantity} keyboardType="numeric" placeholder="0" blurOnSubmit={false} />
+                                </View>
+                                <View style={[styles.inputGroup, { flex: 1 }]}>
+                                    <Text style={styles.inputLabel}>Relocate Bin (Opc.)</Text>
+                                    <TextInput style={[styles.input, styles.monoText]} value={relocatedBin} onChangeText={t => setRelocatedBin(t.toUpperCase())} placeholder="Nuevo bin" blurOnSubmit={false} />
+                                </View>
+                            </View>
+
+                            {itemData && (
+                                <View style={styles.summaryBox}>
+                                    <View style={styles.summaryItem}><Text style={styles.summaryLabel}>Recibido</Text><Text style={styles.summaryValue}>{quantity || 0}</Text></View>
+                                    <View style={styles.summaryItem}><Text style={styles.summaryLabel}>Esperado</Text><Text style={styles.summaryValue}>{itemData.defaultQtyGrn || 0}</Text></View>
+                                    <View style={styles.summaryItem}>
+                                        <Text style={styles.summaryLabel}>Diferencia</Text>
+                                        <Text style={[styles.summaryValue, styles.summaryValueBold, diff < 0 && styles.diffNegative, diff > 0 && styles.diffPositive]}>
+                                            {diff > 0 ? `+${diff}` : diff}
+                                        </Text>
+                                    </View>
+                                </View>
+                            )}
+
+                            <View style={styles.row}>
+                                <TouchableOpacity style={[styles.saveButton, !itemData && styles.buttonDisabled]} onPress={handleSaveLog} disabled={saving || !itemData}>
+                                    {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveButtonText}>{editId ? 'Guardar Cambios' : 'Añadir Registro'}</Text>}
+                                </TouchableOpacity>
+                                {editId && <TouchableOpacity style={styles.cancelButton} onPress={resetForm}><Text style={styles.cancelButtonText}>Cancelar</Text></TouchableOpacity>}
+                            </View>
+
+                            <View style={styles.divider} />
+                            
+                            <TouchableOpacity style={styles.logsToggle} onPress={toggleLogs}>
+                                <View style={styles.rowCentered}>
+                                    <Icon name={logsExpanded ? "chevron-down" : "chevron-right"} size={24} color="#333" />
+                                    <Text style={styles.logsSectionTitle}>Últimos Registros {logs.length > 0 ? `(${logs.length})` : ''}</Text>
+                                </View>
+                                {logsExpanded && (
+                                    <TouchableOpacity onPress={() => loadLogs(true)}>
+                                        <Icon name="refresh" size={20} color="#0854a0" />
+                                    </TouchableOpacity>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    }
                     onEndReached={() => logsExpanded && hasMore && loadLogs()}
                     onEndReachedThreshold={0.5}
                     ListFooterComponent={logsLoading && logsExpanded ? <ActivityIndicator style={{ margin: 20 }} color="#0854a0" /> : null}

@@ -330,18 +330,20 @@ const PickingScreen = ({ navigation }) => {
 
     const renderRecentOrder = ({ item }) => (
         <TouchableOpacity
-            style={styles.recentCard}
+            style={[styles.recentCard, item.is_audited && styles.recentCardAudited]}
             onPress={() => {
                 setOrderNumber(item.order_number);
                 setDespatchNumber(item.despatch_number);
             }}
         >
             <View style={styles.recentHeader}>
-                <Text style={styles.recentOrderNum}>{item.order_number}</Text>
+                <Text style={[styles.recentOrderNum, item.is_audited && styles.recentOrderNumAudited]}>
+                    {item.order_number}
+                </Text>
                 <View style={styles.recentDespatch}>
                     <Text style={styles.recentDespatchText}>{item.despatch_number}</Text>
                 </View>
-                <View style={styles.recentLinesBadge}>
+                <View style={[styles.recentLinesBadge, item.is_audited && styles.recentLinesBadgeAudited]}>
                     <Text style={styles.recentLinesText}>{item.total_lines} líneas</Text>
                 </View>
             </View>
@@ -772,6 +774,10 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#cce4f6',
     },
+    recentCardAudited: {
+        backgroundColor: '#f1f5f9',
+        borderColor: '#e2e8f0',
+    },
     recentHeader: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -782,6 +788,9 @@ const styles = StyleSheet.create({
         fontSize: 18,
         fontWeight: 'bold',
         color: '#0854a0',
+    },
+    recentOrderNumAudited: {
+        color: '#64748b',
     },
     recentDespatch: {
         backgroundColor: '#fff',
@@ -800,6 +809,9 @@ const styles = StyleSheet.create({
         paddingHorizontal: 10,
         paddingVertical: 4,
         borderRadius: 12,
+    },
+    recentLinesBadgeAudited: {
+        backgroundColor: '#94a3b8',
     },
     recentLinesText: {
         color: '#fff',
