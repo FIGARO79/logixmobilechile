@@ -6,14 +6,12 @@ export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
     const [isLoading, setIsLoading] = useState(false);
-    const [userToken, setUserToken] = useState(null);
     const [userInfo, setUserInfo] = useState(null);
     const [splashLoading, setSplashLoading] = useState(true);
 
     const login = async (username, password) => {
         setIsLoading(true);
         try {
-            // Backend expects FormData for login
             const formData = new FormData();
             formData.append('username', username);
             formData.append('password', password);
@@ -27,21 +25,26 @@ export const AuthProvider = ({ children }) => {
             if (data.user) {
                 setUserInfo(data.user);
                 await AsyncStorage.setItem('user', JSON.stringify(data.user));
-            } else {
-                // Fallback if structure is different, though we saw data.user in Login.jsx
-                if (data.msg === "Login Successful") {
-                    // Handle case where user object might be missing or different
-                    // But based on Login.jsx it expects data.user
-                }
             }
 
             setIsLoading(false);
             return data;
         } catch (error) {
-            // console.error('Login error', error);
             setIsLoading(false);
-            // Throw to let the screen handle the error message display
-            const msg = error.response?.data?.error || error.message;
+            let msg = 'Error de conexión con el servidor';
+            
+            if (error.response) {
+                if (error.response.status === 429) {
+                    msg = 'Demasiados intentos. Por favor, espera un minuto antes de reintentar.';
+                } else if (error.response.status === 401) {
+                    msg = 'Usuario o contraseña incorrectos.';
+                } else if (error.response.status === 403) {
+                    msg = error.response.data?.error || 'Tu cuenta está pendiente de aprobación o no tienes permisos.';
+                } else {
+                    msg = error.response.data?.error || error.response.data?.detail || 'Error en el servidor';
+                }
+            }
+            
             throw new Error(msg);
         }
     };
@@ -49,11 +52,8 @@ export const AuthProvider = ({ children }) => {
     const logout = async () => {
         setIsLoading(true);
         try {
-            // Optional: call backend logout
-            // await client.post('/api/logout'); 
-        } catch (e) {
-            // console.log(e);
-        }
+            await client.post('/api/logout').catch(() => {}); 
+        } catch (e) {}
 
         setUserInfo(null);
         await AsyncStorage.removeItem('user');
@@ -64,14 +64,12 @@ export const AuthProvider = ({ children }) => {
         try {
             setSplashLoading(true);
             let user = await AsyncStorage.getItem('user');
-
             if (user) {
                 setUserInfo(JSON.parse(user));
             }
             setSplashLoading(false);
         } catch (e) {
             setSplashLoading(false);
-            // console.log(`isLogged in error ${e}`);
         }
     };
 
