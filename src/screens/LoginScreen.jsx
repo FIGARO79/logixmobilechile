@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 const LoginScreen = () => {
-    const { login, isLoading } = useContext(AuthContext);
+    const { login, biometricLogin, isLoading, isBiometricAvailable, biometryType } = useContext(AuthContext);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [isPasswordVisible, setIsPasswordVisible] = useState(false);
@@ -23,6 +23,15 @@ const LoginScreen = () => {
         } catch (e) {
             Vibration.vibrate([0, 200, 100, 200]);
             setError(e.message || 'Error al iniciar sesión. Verifica tus credenciales.');
+        }
+    };
+
+    const handleBiometricLogin = async () => {
+        setError('');
+        try {
+            await biometricLogin();
+        } catch (e) {
+            setError(e.message);
         }
     };
 
@@ -73,17 +82,33 @@ const LoginScreen = () => {
                     </View>
                 </View>
 
-                <TouchableOpacity
-                    style={[styles.button, isLoading && styles.buttonDisabled]}
-                    onPress={handleLogin}
-                    disabled={isLoading}
-                >
-                    {isLoading ? (
-                        <ActivityIndicator color="#fff" />
-                    ) : (
-                        <Text style={styles.buttonText}>Entrar</Text>
+                <View style={styles.actionsContainer}>
+                    <TouchableOpacity
+                        style={[styles.button, isLoading && styles.buttonDisabled, { flex: 1 }]}
+                        onPress={handleLogin}
+                        disabled={isLoading}
+                    >
+                        {isLoading ? (
+                            <ActivityIndicator color="#fff" />
+                        ) : (
+                            <Text style={styles.buttonText}>Entrar</Text>
+                        )}
+                    </TouchableOpacity>
+
+                    {isBiometricAvailable && (
+                        <TouchableOpacity
+                            style={styles.biometricButton}
+                            onPress={handleBiometricLogin}
+                            disabled={isLoading}
+                        >
+                            <Icon 
+                                name={biometryType === 'FaceID' ? "face-recognition" : "fingerprint"} 
+                                size={32} 
+                                color="#0070d2" 
+                            />
+                        </TouchableOpacity>
                     )}
-                </TouchableOpacity>
+                </View>
             </View>
         </SafeAreaView>
     );
@@ -141,17 +166,31 @@ const styles = StyleSheet.create({
         padding: 12,
         paddingRight: 16,
     },
+    actionsContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 20,
+        gap: 12,
+    },
     button: {
         backgroundColor: '#0070d2',
         padding: 20,
         borderRadius: 8,
         alignItems: 'center',
-        marginTop: 20,
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.1,
         shadowRadius: 4,
         elevation: 3,
+    },
+    biometricButton: {
+        backgroundColor: '#fff',
+        padding: 14,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#0070d2',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     buttonDisabled: {
         opacity: 0.7,

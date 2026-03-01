@@ -1,42 +1,55 @@
 import axios from 'axios';
+import axiosRetry from 'axios-retry';
 
-// Backend VPS Address (usando dominio con certificado SSL válido)
+// Backend VPS Address
 const API_URL = 'https://logixapp.dev';
 
 const client = axios.create({
-    baseURL: 'https://logixapp.dev',
+    baseURL: API_URL,
     headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
     },
     withCredentials: true,
+    timeout: 10000, // 10 segundos de timeout
 });
 
-// Request Interceptor: Log all outgoing requests
+// Configurar Reintentos Automáticos
+axiosRetry(client, {
+    retries: 3, // Reintentar hasta 3 veces
+    retryDelay: (retryCount) => {
+        console.log(`[API Retry] Intento ${retryCount}...`);
+        return retryCount * 2000; // 2s, 4s, 6s
+    },
+    retryCondition: (error) => {
+        // Reintentar solo si es error de red o error 5xx del servidor
+        return axiosRetry.isNetworkOrIdempotentRequestError(error) || 
+               (error.response && error.response.status >= 500);
+    },
+});
+
+// Request Interceptor
 client.interceptors.request.use(
     (config) => {
-        console.log(`[API Request] ${config.method.toUpperCase()} ${config.url}`, config.data || '');
+        console.log(`[API Request] ${config.method.toUpperCase()} ${config.url}`);
         return config;
     },
     (error) => {
-        console.error('[API Request Error]', error);
         return Promise.reject(error);
     }
 );
 
-// Response Interceptor: Log all incoming responses
+// Response Interceptor
 client.interceptors.response.use(
     (response) => {
-        console.log(`[API Response] ${response.status} ${response.config.url}`, response.data);
         return response;
     },
     (error) => {
-        console.error(`[API Response Error] ${error.response?.status || 'Network'} ${error.config?.url}`,
-            error.response?.data || error.message);
+        if (!error.response) {
+            console.error('[Network Error] Verifica tu conexión a internet.');
+        }
         return Promise.reject(error);
     }
 );
-// Important for handling cookies if the backend sets them
-// Note: Android might need extra config for self-signed certs if https
 
 export default client;

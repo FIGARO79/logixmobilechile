@@ -311,11 +311,29 @@ const InboundScreen = ({ navigation }) => {
 
                             {itemData && (
                                 <View style={styles.itemDetails}>
-                                    <Text style={styles.itemDescription}>{itemData.description}</Text>
                                     <View style={styles.row}>
-                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Bin Original</Text><Text style={[styles.detailValue, styles.monoText]}>{itemData.binLocation || 'N/A'}</Text></View>
-                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>ABC</Text><Text style={styles.detailValue}>{itemData.itemType || 'N/A'}</Text></View>
-                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Qty GRN</Text><Text style={styles.detailValue}>{itemData.defaultQtyGrn || 0}</Text></View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.itemDescription}>{itemData.description}</Text>
+                                            <View style={styles.row}>
+                                                <View style={styles.detailBox}><Text style={styles.detailLabel}>ABC</Text><Text style={styles.detailValue}>{itemData.itemType || 'N/A'}</Text></View>
+                                                <View style={styles.detailBox}><Text style={styles.detailLabel}>Qty GRN</Text><Text style={styles.detailValue}>{itemData.defaultQtyGrn || 0}</Text></View>
+                                            </View>
+                                        </View>
+                                        
+                                        {/* Sugerencia de Slotting */}
+                                        <TouchableOpacity 
+                                            style={styles.suggestionBox}
+                                            onPress={() => setRelocatedBin(itemData.binLocation || '')}
+                                        >
+                                            <Text style={styles.suggestionLabel}>Sugerencia</Text>
+                                            <View style={styles.rowCentered}>
+                                                <Icon name="map-marker-path" size={20} color="#16a34a" />
+                                                <Text style={[styles.suggestionValue, styles.monoText]}>
+                                                    {itemData.binLocation || 'Piso'}
+                                                </Text>
+                                            </View>
+                                            <Text style={styles.suggestionHint}>Tap para usar</Text>
+                                        </TouchableOpacity>
                                     </View>
                                 </View>
                             )}
@@ -397,7 +415,20 @@ const styles = StyleSheet.create({
     iconButton: { backgroundColor: '#354a5f', width: 56, height: 56, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
     searchButton: { backgroundColor: '#0854a0' },
     itemDetails: { backgroundColor: '#e8f4fc', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#cce4f6' },
-    itemDescription: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 10 },
+    itemDescription: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 10, flexShrink: 1 },
+    suggestionBox: {
+        backgroundColor: '#f0fdf4',
+        padding: 10,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#bbf7d0',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 100,
+    },
+    suggestionLabel: { fontSize: 10, fontWeight: 'bold', color: '#16a34a', textTransform: 'uppercase', marginBottom: 2 },
+    suggestionValue: { fontSize: 16, fontWeight: 'bold', color: '#111' },
+    suggestionHint: { fontSize: 8, color: '#16a34a', marginTop: 2, fontStyle: 'italic' },
     detailBox: { flex: 1 },
     detailLabel: { fontSize: 10, color: '#666', textTransform: 'uppercase' },
     detailValue: { fontSize: 14, fontWeight: '600', color: '#333' },
