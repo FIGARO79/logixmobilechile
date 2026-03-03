@@ -316,24 +316,30 @@ const InboundScreen = ({ navigation }) => {
                                             <Text style={styles.itemDescription}>{itemData.description}</Text>
                                             <View style={styles.row}>
                                                 <View style={styles.detailBox}><Text style={styles.detailLabel}>ABC</Text><Text style={styles.detailValue}>{itemData.itemType || 'N/A'}</Text></View>
+                                                <View style={styles.detailBox}><Text style={styles.detailLabel}>Actual</Text><Text style={[styles.detailValue, styles.monoText]}>{itemData.binLocation || 'N/A'}</Text></View>
                                                 <View style={styles.detailBox}><Text style={styles.detailLabel}>Qty GRN</Text><Text style={styles.detailValue}>{itemData.defaultQtyGrn || 0}</Text></View>
                                             </View>
                                         </View>
                                         
                                         {/* Sugerencia de Slotting */}
-                                        <TouchableOpacity 
-                                            style={styles.suggestionBox}
-                                            onPress={() => setRelocatedBin(itemData.binLocation || '')}
-                                        >
-                                            <Text style={styles.suggestionLabel}>Sugerencia</Text>
-                                            <View style={styles.rowCentered}>
-                                                <Icon name="map-marker-path" size={20} color="#16a34a" />
-                                                <Text style={[styles.suggestionValue, styles.monoText]}>
-                                                    {itemData.binLocation || 'Piso'}
-                                                </Text>
-                                            </View>
-                                            <Text style={styles.suggestionHint}>Tap para usar</Text>
-                                        </TouchableOpacity>
+                                        {itemData.suggestedBin && (
+                                            <TouchableOpacity 
+                                                style={styles.suggestionBox}
+                                                onPress={() => {
+                                                    setRelocatedBin(itemData.suggestedBin);
+                                                    Vibration.vibrate(50);
+                                                }}
+                                            >
+                                                <Text style={styles.suggestionLabel}>Slotting</Text>
+                                                <View style={styles.rowCentered}>
+                                                    <Icon name="auto-fix" size={20} color="#16a34a" />
+                                                    <Text style={[styles.suggestionValue, styles.monoText]}>
+                                                        {itemData.suggestedBin}
+                                                    </Text>
+                                                </View>
+                                                <Text style={styles.suggestionHint}>Tap para usar</Text>
+                                            </TouchableOpacity>
+                                        )}
                                     </View>
                                 </View>
                             )}
