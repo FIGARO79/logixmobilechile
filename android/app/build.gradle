@@ -72,6 +72,11 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+    packagingOptions {
+        jniLibs {
+            pickFirsts += ['**/libcrypto.so', '**/libssl.so']
+        }
+    }
 
     applicationVariants.all { variant ->
         variant.outputs.all {
@@ -79,10 +84,6 @@ android {
         }
     }
 
-    packagingOptions {
-        pickFirst "**/libcrypto.so"
-        pickFirst "**/libssl.so"
-    }
 }
 
 dependencies {
