@@ -40,6 +40,7 @@ const InboundScreen = ({ navigation }) => {
     // Data State
     const [itemData, setItemData] = useState(null);
     const [logs, setLogs] = useState([]);
+    const [allLogs, setAllLogs] = useState([]); // Cache de todos los logs para lazy load local
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [editId, setEditId] = useState(null);
@@ -59,9 +60,45 @@ const InboundScreen = ({ navigation }) => {
     const quantityRef = useRef(null);
     const itemCodeRef = useRef(null);
 
-    const loadLogs = async (reset = false) => {
-        // ... (existing loadLogs code)
-    };
+    useEffect(() => {
+        loadLogs(true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Solo al montar
+
+    const loadLogs = useCallback(async (reset = false) => {
+        if (logsLoading || (!hasMore && !reset)) return;
+
+        setLogsLoading(true);
+        try {
+            let dataToUse = allLogs;
+            let currentOffset = reset ? 0 : offset;
+
+            // Si es reset o no tenemos datos, consultamos al servidor
+            if (reset || allLogs.length === 0) {
+                const res = await client.get('/api/get_logs');
+                dataToUse = Array.isArray(res.data) ? res.data : [];
+                setAllLogs(dataToUse);
+                currentOffset = 0;
+            }
+
+            // Lazy load local: tomamos solo el siguiente bloque
+            const nextBatch = dataToUse.slice(currentOffset, currentOffset + LIMIT);
+            
+            if (reset) {
+                setLogs(nextBatch);
+                setOffset(LIMIT);
+                setHasMore(dataToUse.length > LIMIT);
+            } else {
+                setLogs(prev => [...prev, ...nextBatch]);
+                setOffset(prev => prev + LIMIT);
+                setHasMore(dataToUse.length > (currentOffset + LIMIT));
+            }
+        } catch (e) {
+            console.error('Error loading logs', e);
+        } finally {
+            setLogsLoading(false);
+        }
+    }, [allLogs, hasMore, logsLoading, offset]);
 
     const handleLookupReference = async (type, value) => {
         if (!value || editId) return;
@@ -240,173 +277,161 @@ const InboundScreen = ({ navigation }) => {
 
     return (
         <SafeAreaView style={styles.container}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+            <KeyboardAvoidingView behavior={Platform.OS === 'any' ? 'padding' : undefined} style={styles.flex}>
                 <View style={styles.header}>
                     <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}><Text style={styles.backText}>← Regresar</Text></TouchableOpacity>
                     <Text style={styles.title}>Inbound - Recepción</Text>
                 </View>
 
+                {/* Formulario Fijo */}
+                <View style={styles.formCard}>
+                    <View style={styles.row}>
+                        <View style={[styles.inputGroup, { flex: 1 }]}>
+                            <Text style={styles.inputLabel}>Import Reference</Text>
+                            <TextInput
+                                style={[styles.input, editId && styles.inputDisabled, styles.monoText]}
+                                value={importRef}
+                                onChangeText={t => setImportRef(t.toUpperCase())}
+                                onBlur={() => handleLookupReference('import_ref', importRef)}
+                                placeholder="I.R."
+                                editable={!editId}
+                                keyboardType="numeric"
+                                blurOnSubmit={false}
+                            />
+                        </View>
+                        <View style={[styles.inputGroup, { flex: 1 }]}>
+                            <Text style={styles.inputLabel}>Waybill</Text>
+                            <TextInput
+                                style={[styles.input, styles.monoText]}
+                                value={waybill}
+                                onChangeText={t => setWaybill(t.toUpperCase())}
+                                onBlur={() => handleLookupReference('waybill', waybill)}
+                                placeholder="W.B."
+                                blurOnSubmit={false}
+                                keyboardType="default"
+                                autoCapitalize="characters"
+                            />
+                        </View>
+                    </View>
+
+                    <View style={styles.inputGroup}>
+                        <Text style={styles.inputLabel}>Item Code</Text>
+                        <View style={styles.row}>
+                            <TextInput
+                                ref={itemCodeRef}
+                                style={[styles.input, { flex: 1 }, editId && styles.inputDisabled, styles.monoText]}
+                                value={itemCode}
+                                onChangeText={t => setItemCode(t.toUpperCase())}
+                                placeholder="Escanear o escribir"
+                                editable={!editId}
+                                onSubmitEditing={() => findItem()}
+                                blurOnSubmit={false}
+                                keyboardType="default"
+                                autoCapitalize="characters"
+                            />
+                            {!editId && (
+                                <>
+                                    <TouchableOpacity style={styles.iconButton} onPress={() => setScannerOpen(true)}>
+                                        <QrIcon size={24} color="#fff" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity style={[styles.iconButton, styles.searchButton]} onPress={() => findItem()} disabled={loading}>
+                                        {loading ? <ActivityIndicator color="#fff" size="small" /> : <Icon name="magnify" size={24} color="#fff" />}
+                                    </TouchableOpacity>
+                                </>
+                            )}
+                        </View>
+                    </View>
+
+                    {itemData && (
+                        <View style={styles.itemDetails}>
+                            <View style={styles.row}>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.itemDescription}>{itemData.description}</Text>
+                                    <View style={styles.row}>
+                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>ABC</Text><Text style={styles.detailValue}>{itemData.itemType || 'N/A'}</Text></View>
+                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Actual</Text><Text style={[styles.detailValue, styles.monoText]}>{itemData.binLocation || 'N/A'}</Text></View>
+                                        <View style={styles.detailBox}><Text style={styles.detailLabel}>Qty GRN</Text><Text style={styles.detailValue}>{itemData.defaultQtyGrn || 0}</Text></View>
+                                    </View>
+                                </View>
+                                
+                                {itemData.suggestedBin && (
+                                    <TouchableOpacity 
+                                        style={[
+                                            styles.suggestionBox,
+                                            itemData.is_ai_prediction && styles.suggestionBoxAI
+                                        ]}
+                                        onPress={() => {
+                                            setRelocatedBin(itemData.suggestedBin);
+                                            Vibration.vibrate(50);
+                                        }}
+                                    >
+                                        <Text style={[
+                                            styles.suggestionLabel,
+                                            itemData.is_ai_prediction && styles.suggestionLabelAI
+                                        ]}>
+                                            {itemData.is_ai_prediction ? 'Predicción IA' : 'Slotting'}
+                                        </Text>
+                                        <View style={styles.rowCentered}>
+                                            <Icon 
+                                                name={itemData.is_ai_prediction ? "robot" : "auto-fix"} 
+                                                size={18} 
+                                                color={itemData.is_ai_prediction ? "#1d4ed8" : "#16a34a"} 
+                                            />
+                                            <Text style={[styles.suggestionValue, styles.monoText]}>
+                                                {itemData.suggestedBin}
+                                            </Text>
+                                        </View>
+                                        <Text style={styles.suggestionHint}>Tap para usar</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        </View>
+                    )}
+
+                    <View style={styles.row}>
+                        <View style={[styles.inputGroup, { flex: 1 }]}>
+                            <Text style={styles.inputLabel}>Qty Received</Text>
+                            <TextInput ref={quantityRef} style={styles.input} value={quantity} onChangeText={setQuantity} keyboardType="numeric" placeholder="0" blurOnSubmit={false} />
+                        </View>
+                        <View style={[styles.inputGroup, { flex: 1 }]}>
+                            <Text style={styles.inputLabel}>Relocate Bin (Opc.)</Text>
+                            <TextInput style={[styles.input, styles.monoText]} value={relocatedBin} onChangeText={t => setRelocatedBin(t.toUpperCase())} placeholder="Nuevo bin" blurOnSubmit={false} />
+                        </View>
+                    </View>
+
+                    <View style={styles.row}>
+                        <TouchableOpacity style={[styles.saveButton, !itemData && styles.buttonDisabled]} onPress={handleSaveLog} disabled={saving || !itemData}>
+                            {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveButtonText}>{editId ? 'Guardar Cambios' : 'Añadir Registro'}</Text>}
+                        </TouchableOpacity>
+                        {editId && <TouchableOpacity style={styles.cancelButton} onPress={resetForm}><Text style={styles.cancelButtonText}>Cancelar</Text></TouchableOpacity>}
+                    </View>
+
+                    <View style={styles.divider} />
+                    
+                    <TouchableOpacity style={styles.logsToggle} onPress={toggleLogs}>
+                        <View style={styles.rowCentered}>
+                            <Icon name={logsExpanded ? "chevron-down" : "chevron-right"} size={24} color="#333" />
+                            <Text style={styles.logsSectionTitle}>Últimos Registros {logs.length > 0 ? `(${logs.length})` : ''}</Text>
+                        </View>
+                        {logsExpanded && (
+                            <TouchableOpacity onPress={() => loadLogs(true)}>
+                                <Icon name="refresh" size={20} color="#0854a0" />
+                            </TouchableOpacity>
+                        )}
+                    </TouchableOpacity>
+                </View>
+
+                {/* Lista de Registros con scroll independiente */}
                 <FlatList
                     data={logsExpanded ? logs : []}
                     renderItem={renderLog}
-                    keyExtractor={item => item.id.toString()}
-                    ListHeaderComponent={
-                        <View style={styles.formCard}>
-                            <View style={styles.row}>
-                                <View style={[styles.inputGroup, { flex: 1 }]}>
-                                    <Text style={styles.inputLabel}>Import Reference</Text>
-                                    <TextInput
-                                        style={[styles.input, editId && styles.inputDisabled, styles.monoText]}
-                                        value={importRef}
-                                        onChangeText={t => setImportRef(t.toUpperCase())}
-                                        onBlur={() => handleLookupReference('import_ref', importRef)}
-                                        placeholder="I.R."
-                                        editable={!editId}
-                                        keyboardType="numeric"
-                                        blurOnSubmit={false}
-                                    />
-                                </View>
-                                <View style={[styles.inputGroup, { flex: 1 }]}>
-                                    <Text style={styles.inputLabel}>Waybill</Text>
-                                    <TextInput
-                                        style={[styles.input, styles.monoText]}
-                                        value={waybill}
-                                        onChangeText={t => setWaybill(t.toUpperCase())}
-                                        onBlur={() => handleLookupReference('waybill', waybill)}
-                                        placeholder="W.B."
-                                        blurOnSubmit={false}
-                                        keyboardType="default"
-                                        autoCapitalize="characters"
-                                    />
-                                </View>
-                            </View>
-
-                            <View style={styles.inputGroup}>
-                                <Text style={styles.inputLabel}>Item Code</Text>
-                                <View style={styles.row}>
-                                    <TextInput
-                                        ref={itemCodeRef}
-                                        style={[styles.input, { flex: 1 }, editId && styles.inputDisabled, styles.monoText]}
-                                        value={itemCode}
-                                        onChangeText={t => setItemCode(t.toUpperCase())}
-                                        placeholder="Escanear o escribir"
-                                        editable={!editId}
-                                        onSubmitEditing={() => findItem()}
-                                        blurOnSubmit={false}
-                                        keyboardType="default"
-                                        autoCapitalize="characters"
-                                    />
-                                    {!editId && (
-                                        <>
-                                            <TouchableOpacity style={styles.iconButton} onPress={() => setScannerOpen(true)}>
-                                                <QrIcon size={24} color="#fff" />
-                                            </TouchableOpacity>
-                                            <TouchableOpacity style={[styles.iconButton, styles.searchButton]} onPress={() => findItem()} disabled={loading}>
-                                                {loading ? <ActivityIndicator color="#fff" size="small" /> : <Icon name="magnify" size={24} color="#fff" />}
-                                            </TouchableOpacity>
-                                        </>
-                                    )}
-                                </View>
-                            </View>
-
-                            {itemData && (
-                                <View style={styles.itemDetails}>
-                                    <View style={styles.row}>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.itemDescription}>{itemData.description}</Text>
-                                            <View style={styles.row}>
-                                                <View style={styles.detailBox}><Text style={styles.detailLabel}>ABC</Text><Text style={styles.detailValue}>{itemData.itemType || 'N/A'}</Text></View>
-                                                <View style={styles.detailBox}><Text style={styles.detailLabel}>Actual</Text><Text style={[styles.detailValue, styles.monoText]}>{itemData.binLocation || 'N/A'}</Text></View>
-                                                <View style={styles.detailBox}><Text style={styles.detailLabel}>Qty GRN</Text><Text style={styles.detailValue}>{itemData.defaultQtyGrn || 0}</Text></View>
-                                            </View>
-                                        </View>
-                                        
-                                        {/* Sugerencia de Slotting / IA */}
-                                        {itemData.suggestedBin && (
-                                            <TouchableOpacity 
-                                                style={[
-                                                    styles.suggestionBox,
-                                                    itemData.is_ai_prediction && styles.suggestionBoxAI
-                                                ]}
-                                                onPress={() => {
-                                                    setRelocatedBin(itemData.suggestedBin);
-                                                    Vibration.vibrate(50);
-                                                }}
-                                            >
-                                                <Text style={[
-                                                    styles.suggestionLabel,
-                                                    itemData.is_ai_prediction && styles.suggestionLabelAI
-                                                ]}>
-                                                    {itemData.is_ai_prediction ? 'Predicción IA' : 'Slotting'}
-                                                </Text>
-                                                <View style={styles.rowCentered}>
-                                                    <Icon 
-                                                        name={itemData.is_ai_prediction ? "robot" : "auto-fix"} 
-                                                        size={18} 
-                                                        color={itemData.is_ai_prediction ? "#1d4ed8" : "#16a34a"} 
-                                                    />
-                                                    <Text style={[styles.suggestionValue, styles.monoText]}>
-                                                        {itemData.suggestedBin}
-                                                    </Text>
-                                                </View>
-                                                <Text style={styles.suggestionHint}>Tap para usar</Text>
-                                            </TouchableOpacity>
-                                        )}
-                                    </View>
-                                </View>
-                            )}
-
-                            <View style={styles.row}>
-                                <View style={[styles.inputGroup, { flex: 1 }]}>
-                                    <Text style={styles.inputLabel}>Qty Received</Text>
-                                    <TextInput ref={quantityRef} style={styles.input} value={quantity} onChangeText={setQuantity} keyboardType="numeric" placeholder="0" blurOnSubmit={false} />
-                                </View>
-                                <View style={[styles.inputGroup, { flex: 1 }]}>
-                                    <Text style={styles.inputLabel}>Relocate Bin (Opc.)</Text>
-                                    <TextInput style={[styles.input, styles.monoText]} value={relocatedBin} onChangeText={t => setRelocatedBin(t.toUpperCase())} placeholder="Nuevo bin" blurOnSubmit={false} />
-                                </View>
-                            </View>
-
-                            {itemData && (
-                                <View style={styles.summaryBox}>
-                                    <View style={styles.summaryItem}><Text style={styles.summaryLabel}>Recibido</Text><Text style={styles.summaryValue}>{quantity || 0}</Text></View>
-                                    <View style={styles.summaryItem}><Text style={styles.summaryLabel}>Esperado</Text><Text style={styles.summaryValue}>{itemData.defaultQtyGrn || 0}</Text></View>
-                                    <View style={styles.summaryItem}>
-                                        <Text style={styles.summaryLabel}>Diferencia</Text>
-                                        <Text style={[styles.summaryValue, styles.summaryValueBold, diff < 0 && styles.diffNegative, diff > 0 && styles.diffPositive]}>
-                                            {diff > 0 ? `+${diff}` : diff}
-                                        </Text>
-                                    </View>
-                                </View>
-                            )}
-
-                            <View style={styles.row}>
-                                <TouchableOpacity style={[styles.saveButton, !itemData && styles.buttonDisabled]} onPress={handleSaveLog} disabled={saving || !itemData}>
-                                    {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveButtonText}>{editId ? 'Guardar Cambios' : 'Añadir Registro'}</Text>}
-                                </TouchableOpacity>
-                                {editId && <TouchableOpacity style={styles.cancelButton} onPress={resetForm}><Text style={styles.cancelButtonText}>Cancelar</Text></TouchableOpacity>}
-                            </View>
-
-                            <View style={styles.divider} />
-                            
-                            <TouchableOpacity style={styles.logsToggle} onPress={toggleLogs}>
-                                <View style={styles.rowCentered}>
-                                    <Icon name={logsExpanded ? "chevron-down" : "chevron-right"} size={24} color="#333" />
-                                    <Text style={styles.logsSectionTitle}>Últimos Registros {logs.length > 0 ? `(${logs.length})` : ''}</Text>
-                                </View>
-                                {logsExpanded && (
-                                    <TouchableOpacity onPress={() => loadLogs(true)}>
-                                        <Icon name="refresh" size={20} color="#0854a0" />
-                                    </TouchableOpacity>
-                                )}
-                            </TouchableOpacity>
-                        </View>
-                    }
+                    keyExtractor={(item, index) => item?.id?.toString() || index.toString()}
                     onEndReached={() => logsExpanded && hasMore && loadLogs()}
                     onEndReachedThreshold={0.5}
                     ListFooterComponent={logsLoading && logsExpanded ? <ActivityIndicator style={{ margin: 20 }} color="#0854a0" /> : null}
                     contentContainerStyle={styles.listContent}
                     keyboardShouldPersistTaps="handled"
+                    style={styles.flex} // Asegura que la lista ocupe el espacio restante y permita scroll
                 />
             </KeyboardAvoidingView>
             <ScannerModal visible={scannerOpen} onScan={handleScan} onClose={() => setScannerOpen(false)} />
