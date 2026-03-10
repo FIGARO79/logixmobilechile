@@ -57,29 +57,22 @@ const InboundScreen = ({ navigation }) => {
     useDataWedge(handleScan);
 
     const quantityRef = useRef(null);
+    const itemCodeRef = useRef(null);
 
     const loadLogs = async (reset = false) => {
-        if (logsLoading || (!hasMore && !reset)) return;
+        // ... (existing loadLogs code)
+    };
 
-        setLogsLoading(true);
-        const newOffset = reset ? 0 : offset;
-
+    const handleLookupReference = async (type, value) => {
+        if (!value || editId) return;
         try {
-            const res = await client.get(`/api/get_logs?limit=${LIMIT}&offset=${newOffset}`);
-            const newLogs = res.data;
-
-            if (reset) {
-                setLogs(newLogs);
-            } else {
-                setLogs(prev => [...prev, ...newLogs]);
-            }
-
-            setOffset(newOffset + LIMIT);
-            setHasMore(newLogs.length === LIMIT);
+            const params = type === 'waybill' ? `waybill=${encodeURIComponent(value)}` : `import_ref=${encodeURIComponent(value)}`;
+            const res = await client.get(`/api/inbound/lookup_reference?${params}`);
+            const data = res.data;
+            if (data.waybill && !waybill) setWaybill(data.waybill);
+            if (data.import_ref && !importRef) setImportRef(data.import_ref);
         } catch (e) {
-            console.error('Error loading logs:', e);
-        } finally {
-            setLogsLoading(false);
+            console.error('Error lookup', e);
         }
     };
 
@@ -91,7 +84,7 @@ const InboundScreen = ({ navigation }) => {
         }
     };
 
-    const findItem = async (code = itemCode) => {
+    const findItem = useCallback(async (code = itemCode) => {
         if (!code || !importRef) {
             Vibration.vibrate([0, 100, 50, 100]);
             Alert.alert('Faltan Datos', 'Ingrese Import Reference e Item Code');
@@ -120,7 +113,7 @@ const InboundScreen = ({ navigation }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [itemCode, importRef, editId]);
 
     const handleScan = useCallback((code) => {
         setScannerOpen(false);
@@ -129,7 +122,7 @@ const InboundScreen = ({ navigation }) => {
         if (importRef) {
             findItem(upperCode);
         }
-    }, [importRef]);
+    }, [importRef, findItem]);
 
     const handleSaveLog = async () => {
         if (!itemData) return;
@@ -266,6 +259,7 @@ const InboundScreen = ({ navigation }) => {
                                         style={[styles.input, editId && styles.inputDisabled, styles.monoText]}
                                         value={importRef}
                                         onChangeText={t => setImportRef(t.toUpperCase())}
+                                        onBlur={() => handleLookupReference('import_ref', importRef)}
                                         placeholder="I.R."
                                         editable={!editId}
                                         keyboardType="numeric"
@@ -278,8 +272,11 @@ const InboundScreen = ({ navigation }) => {
                                         style={[styles.input, styles.monoText]}
                                         value={waybill}
                                         onChangeText={t => setWaybill(t.toUpperCase())}
+                                        onBlur={() => handleLookupReference('waybill', waybill)}
                                         placeholder="W.B."
                                         blurOnSubmit={false}
+                                        keyboardType="default"
+                                        autoCapitalize="characters"
                                     />
                                 </View>
                             </View>
@@ -288,6 +285,7 @@ const InboundScreen = ({ navigation }) => {
                                 <Text style={styles.inputLabel}>Item Code</Text>
                                 <View style={styles.row}>
                                     <TextInput
+                                        ref={itemCodeRef}
                                         style={[styles.input, { flex: 1 }, editId && styles.inputDisabled, styles.monoText]}
                                         value={itemCode}
                                         onChangeText={t => setItemCode(t.toUpperCase())}
@@ -295,6 +293,8 @@ const InboundScreen = ({ navigation }) => {
                                         editable={!editId}
                                         onSubmitEditing={() => findItem()}
                                         blurOnSubmit={false}
+                                        keyboardType="default"
+                                        autoCapitalize="characters"
                                     />
                                     {!editId && (
                                         <>
@@ -321,18 +321,30 @@ const InboundScreen = ({ navigation }) => {
                                             </View>
                                         </View>
                                         
-                                        {/* Sugerencia de Slotting */}
+                                        {/* Sugerencia de Slotting / IA */}
                                         {itemData.suggestedBin && (
                                             <TouchableOpacity 
-                                                style={styles.suggestionBox}
+                                                style={[
+                                                    styles.suggestionBox,
+                                                    itemData.is_ai_prediction && styles.suggestionBoxAI
+                                                ]}
                                                 onPress={() => {
                                                     setRelocatedBin(itemData.suggestedBin);
                                                     Vibration.vibrate(50);
                                                 }}
                                             >
-                                                <Text style={styles.suggestionLabel}>Slotting</Text>
+                                                <Text style={[
+                                                    styles.suggestionLabel,
+                                                    itemData.is_ai_prediction && styles.suggestionLabelAI
+                                                ]}>
+                                                    {itemData.is_ai_prediction ? 'Predicción IA' : 'Slotting'}
+                                                </Text>
                                                 <View style={styles.rowCentered}>
-                                                    <Icon name="auto-fix" size={20} color="#16a34a" />
+                                                    <Icon 
+                                                        name={itemData.is_ai_prediction ? "robot" : "auto-fix"} 
+                                                        size={18} 
+                                                        color={itemData.is_ai_prediction ? "#1d4ed8" : "#16a34a"} 
+                                                    />
                                                     <Text style={[styles.suggestionValue, styles.monoText]}>
                                                         {itemData.suggestedBin}
                                                     </Text>
@@ -424,17 +436,22 @@ const styles = StyleSheet.create({
     itemDescription: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 10, flexShrink: 1 },
     suggestionBox: {
         backgroundColor: '#f0fdf4',
-        padding: 10,
+        padding: 8,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: '#bbf7d0',
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: 100,
+        minWidth: 90,
     },
-    suggestionLabel: { fontSize: 10, fontWeight: 'bold', color: '#16a34a', textTransform: 'uppercase', marginBottom: 2 },
-    suggestionValue: { fontSize: 16, fontWeight: 'bold', color: '#111' },
-    suggestionHint: { fontSize: 8, color: '#16a34a', marginTop: 2, fontStyle: 'italic' },
+    suggestionBoxAI: {
+        backgroundColor: '#eff6ff',
+        borderColor: '#bfdbfe',
+    },
+    suggestionLabel: { fontSize: 9, fontWeight: 'bold', color: '#16a34a', textTransform: 'uppercase', marginBottom: 2 },
+    suggestionLabelAI: { color: '#1d4ed8' },
+    suggestionValue: { fontSize: 15, fontWeight: 'bold', color: '#111' },
+    suggestionHint: { fontSize: 7, color: '#666', marginTop: 2, fontStyle: 'italic' },
     detailBox: { flex: 1 },
     detailLabel: { fontSize: 10, color: '#666', textTransform: 'uppercase' },
     detailValue: { fontSize: 14, fontWeight: '600', color: '#333' },

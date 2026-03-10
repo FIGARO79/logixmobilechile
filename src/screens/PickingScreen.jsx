@@ -17,6 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
 import ScannerModal from '../components/ScannerModal';
+import AuditScannerModal from '../components/AuditScannerModal';
 import useDataWedge from '../hooks/useDataWedge';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -48,6 +49,7 @@ const PickingScreen = ({ navigation }) => {
     const [packageAssignments, setPackageAssignments] = useState({}); // { itemCode: { packageNum: qty } }
 
     // Scanning & Modals
+    const [auditScannerOpen, setAuditScannerOpen] = useState(false);
     const [scannerOpen, setScannerOpen] = useState(false);
     const [showPackagesModal, setShowPackagesModal] = useState(false);
     const [showDiffModal, setShowDiffModal] = useState(false);
@@ -145,19 +147,28 @@ const PickingScreen = ({ navigation }) => {
     };
 
     const handleScan = (code) => {
-        setScannerOpen(false);
         if (!code || typeof code !== 'string') return;
 
         const cleanCode = code.trim().toUpperCase();
         if (!cleanCode) return;
 
-        const item = orderItems.find(i => i.code === cleanCode);
+        const itemIndex = orderItems.findIndex(i => i.code === cleanCode);
 
-        if (item) {
-            setSelectedItem(item);
-            setTempQty('1');
-            setShowQtyModal(true);
-            Vibration.vibrate(50);
+        if (itemIndex !== -1) {
+            const item = orderItems[itemIndex];
+            
+            // Si el modal de escaneo continuo está abierto, sumamos +1 automáticamente para agilidad
+            if (auditScannerOpen) {
+                updateItemQuantity(item, 1);
+                Vibration.vibrate(50);
+            } else {
+                // Si es escaneo normal (desde el botón o DataWedge sin modal), preguntamos cantidad
+                setScannerOpen(false);
+                setSelectedItem(item);
+                setTempQty('1');
+                setShowQtyModal(true);
+                Vibration.vibrate(50);
+            }
         } else {
             Vibration.vibrate([0, 200, 100, 200]);
             Alert.alert(
@@ -167,6 +178,45 @@ const PickingScreen = ({ navigation }) => {
         }
     };
 
+    const handleManualQty = (code, totalQty) => {
+        const item = orderItems.find(i => i.code === code);
+        if (!item) return;
+
+        // 1. Calcular la diferencia entre lo nuevo y lo que ya se había escaneado para ese ítem
+        const currentTotalScanned = item.qty_scan;
+        const diffToAdd = totalQty - currentTotalScanned;
+
+        // 2. Actualizar el estado global
+        updateItemQuantity(item, diffToAdd);
+    };
+
+    const updateItemQuantity = (item, qtyToAdd) => {
+        // 1. Update overall order items
+        setOrderItems(prev => prev.map(i => {
+            if (i.code === item.code) {
+                const updatedQtyScan = i.qty_scan + qtyToAdd;
+                return {
+                    ...i,
+                    qty_scan: updatedQtyScan,
+                    difference: updatedQtyScan - i.qty_req
+                };
+            }
+            return i;
+        }));
+
+        // 2. Update package assignments
+        setPackageAssignments(prev => {
+            const newAssignments = { ...prev };
+            const itemCode = item.code;
+            if (!newAssignments[itemCode]) {
+                newAssignments[itemCode] = {};
+            }
+            const pkgKey = currentPackage.toString();
+            newAssignments[itemCode][pkgKey] = (newAssignments[itemCode][pkgKey] || 0) + qtyToAdd;
+            return newAssignments;
+        });
+    };
+
     const confirmQuantity = () => {
         const qtyToAdd = parseInt(tempQty, 10);
         if (isNaN(qtyToAdd) || qtyToAdd <= 0) {
@@ -174,29 +224,7 @@ const PickingScreen = ({ navigation }) => {
             return;
         }
 
-        // 1. Update overall order items
-        const newItems = orderItems.map(item => {
-            if (item.code === selectedItem.code) {
-                const updatedQtyScan = item.qty_scan + qtyToAdd;
-                return {
-                    ...item,
-                    qty_scan: updatedQtyScan,
-                    difference: updatedQtyScan - item.qty_req
-                };
-            }
-            return item;
-        });
-        setOrderItems(newItems);
-
-        // 2. Update package assignments
-        const newAssignments = { ...packageAssignments };
-        const itemCode = selectedItem.code;
-        if (!newAssignments[itemCode]) {
-            newAssignments[itemCode] = {};
-        }
-        const pkgKey = currentPackage.toString();
-        newAssignments[itemCode][pkgKey] = (newAssignments[itemCode][pkgKey] || 0) + qtyToAdd;
-        setPackageAssignments(newAssignments);
+        updateItemQuantity(selectedItem, qtyToAdd);
 
         if (selectedItem.qty_scan + qtyToAdd > selectedItem.qty_req) {
             Vibration.vibrate([0, 100, 50, 100]);
@@ -397,16 +425,17 @@ const PickingScreen = ({ navigation }) => {
                         <View style={styles.searchBar}>
                             <TouchableOpacity
                                 style={styles.scanIconButton}
-                                onPress={() => setScannerOpen(true)}
+                                onPress={() => setAuditScannerOpen(true)}
                             >
-                                <QrIcon size={24} color="#0854a0" />
+                                <Icon name="camera-iris" size={28} color="#0854a0" />
+                                <Text style={styles.scanIconText}>Auditar</Text>
                             </TouchableOpacity>
 
                             <TextInput
                                 style={styles.searchBarInput}
                                 value={manualCode}
                                 onChangeText={setManualCode}
-                                placeholder="Escanear o escribir código..."
+                                placeholder="Escanear o escribir..."
                                 placeholderTextColor="#999"
                                 autoCapitalize="characters"
                                 onSubmitEditing={handleManualSubmit}
@@ -449,7 +478,17 @@ const PickingScreen = ({ navigation }) => {
                     </View>
                 </KeyboardAvoidingView>
 
-                {/* Scanner Modal */}
+                {/* Audit Scanner Modal (Continuous) */}
+                <AuditScannerModal
+                    visible={auditScannerOpen}
+                    orderItems={orderItems}
+                    currentPackage={currentPackage}
+                    onScan={handleScan}
+                    onManualQty={handleManualQty}
+                    onClose={() => setAuditScannerOpen(false)}
+                />
+
+                {/* Scanner Modal (Single Scan) */}
                 <ScannerModal
                     visible={scannerOpen}
                     onScan={handleScan}
@@ -924,7 +963,7 @@ const styles = StyleSheet.create({
         borderColor: '#e2e8f0',
     },
     scanIconButton: {
-        width: 44,
+        width: 70,
         height: 44,
         borderRadius: 10,
         backgroundColor: '#fff',
@@ -932,6 +971,12 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         borderWidth: 1,
         borderColor: '#0854a0',
+    },
+    scanIconText: {
+        fontSize: 10,
+        color: '#0854a0',
+        fontWeight: 'bold',
+        marginTop: -2,
     },
     searchBarInput: {
         flex: 1,
