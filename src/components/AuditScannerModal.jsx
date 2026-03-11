@@ -105,7 +105,6 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
     };
 
     const renderScannedItem = ({ item }) => {
-        const orderItem = orderItems.find(i => i.code === item.code);
         const totalQtyScan = orderItems
             .filter(i => i.code === item.code)
             .reduce((sum, i) => sum + i.qty_scan, 0);
@@ -115,6 +114,14 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
         const isComplete = totalQtyScan >= totalQtyReq && totalQtyReq > 0;
         const isOver = totalQtyScan > totalQtyReq;
 
+        // Datos de líneas múltiples
+        const sameCodeLines = orderItems.filter(i => i.code === item.code);
+        const totalLines = sameCodeLines.length;
+        const isMultiLine = totalLines > 1;
+        // Calcular cuántas líneas están completas
+        const completedLines = sameCodeLines.filter(l => l.qty_scan >= l.qty_req && l.qty_req > 0).length;
+        const allLinesComplete = completedLines === totalLines;
+
         return (
             <TouchableOpacity
                 style={styles.historyItem}
@@ -122,7 +129,27 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
                 activeOpacity={0.7}
             >
                 <View style={styles.historyInfo}>
-                    <Text style={styles.historyCode}>{item.code}</Text>
+                    <View style={styles.historyCodeRow}>
+                        <Text style={styles.historyCode}>{item.code}</Text>
+                        {isMultiLine && (
+                            <View style={[
+                                styles.lineChip,
+                                allLinesComplete ? styles.lineChipComplete : styles.lineChipPending
+                            ]}>
+                                <Icon
+                                    name={allLinesComplete ? 'check-circle' : 'format-list-bulleted'}
+                                    size={10}
+                                    color={allLinesComplete ? '#16a34a' : '#0854a0'}
+                                />
+                                <Text style={[
+                                    styles.lineChipText,
+                                    allLinesComplete ? styles.lineChipTextComplete : styles.lineChipTextPending
+                                ]}>
+                                    {completedLines}/{totalLines} L
+                                </Text>
+                            </View>
+                        )}
+                    </View>
                     <Text style={styles.historyDesc} numberOfLines={1}>{item.description}</Text>
                 </View>
                 <View style={styles.historyRight}>
@@ -354,10 +381,38 @@ const styles = StyleSheet.create({
         borderColor: '#e2e8f0'
     },
     historyInfo: { flex: 1 },
+    historyCodeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
     historyCode: { fontSize: 14, fontWeight: 'bold', color: '#1e293b', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
     historyDesc: { fontSize: 11, color: '#64748b', marginTop: 2 },
     historyRight: { alignItems: 'flex-end', gap: 4 },
     historyTime: { fontSize: 10, color: '#94a3b8' },
+    lineChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    lineChipPending: {
+        backgroundColor: '#eff6ff',
+        borderColor: '#bfdbfe',
+    },
+    lineChipComplete: {
+        backgroundColor: '#dcfce7',
+        borderColor: '#86efac',
+    },
+    lineChipText: {
+        fontSize: 10,
+        fontWeight: '700',
+    },
+    lineChipTextPending: { color: '#0854a0' },
+    lineChipTextComplete: { color: '#16a34a' },
     qtyBadge: {
         minWidth: 32,
         height: 32,

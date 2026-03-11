@@ -229,8 +229,20 @@ const PickingScreen = ({ navigation }) => {
                     updated[lineIndices[0]].qty_scan += remaining;
                 }
             } else {
-                // Restar desde la última línea hacia la primera
+                // Fase 1: remover exceso (qty_scan > qty_req) primero, de primera a última línea.
+                // Esto evita descuadrar líneas que ya estaban bien cuando se corrige un exceso.
                 let toRemove = Math.abs(remaining);
+                for (const idx of lineIndices) {
+                    if (toRemove <= 0) break;
+                    const line = updated[idx];
+                    const excess = Math.max(0, line.qty_scan - line.qty_req);
+                    if (excess > 0) {
+                        const canRemove = Math.min(excess, toRemove);
+                        line.qty_scan -= canRemove;
+                        toRemove -= canRemove;
+                    }
+                }
+                // Fase 2: si aún falta restar (reducción mayor al exceso), quitar de la última línea hacia la primera.
                 for (const idx of [...lineIndices].reverse()) {
                     if (toRemove <= 0) break;
                     const line = updated[idx];
@@ -380,7 +392,12 @@ const PickingScreen = ({ navigation }) => {
         <View style={[styles.itemCard, getItemStyle(item)]}>
             <View style={styles.itemHeader}>
                 <View style={styles.itemInfo}>
-                    <Text style={styles.itemCode}>{item.code}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Text style={styles.itemCode}>{item.code}</Text>
+                        {item.order_line ? (
+                            <Text style={styles.orderLineLabel}>Línea {item.order_line}</Text>
+                        ) : null}
+                    </View>
                     <Text style={styles.itemDesc} numberOfLines={1}>{item.description}</Text>
                 </View>
                 <View style={[styles.diffBadge, getDiffStyle(item.difference)]}>
@@ -1097,6 +1114,15 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#0854a0',
     },
+    orderLineLabel: {
+        fontSize: 11,
+        color: '#94a3b8',
+        fontWeight: '500',
+        backgroundColor: '#f1f5f9',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
     itemDesc: {
         fontSize: 12,
         color: '#666',
@@ -1139,6 +1165,40 @@ const styles = StyleSheet.create({
     },
     qtyScanned: {
         color: '#0854a0',
+    },
+    itemCodeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap',
+    },
+    lineChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 3,
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    lineChipPending: {
+        backgroundColor: '#eff6ff',
+        borderColor: '#bfdbfe',
+    },
+    lineChipComplete: {
+        backgroundColor: '#dcfce7',
+        borderColor: '#86efac',
+    },
+    lineChipText: {
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.3,
+    },
+    lineChipTextPending: {
+        color: '#0854a0',
+    },
+    lineChipTextComplete: {
+        color: '#16a34a',
     },
     itemPackageInfo: {
         flex: 1,
