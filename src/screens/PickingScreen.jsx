@@ -152,19 +152,19 @@ const PickingScreen = ({ navigation }) => {
         const cleanCode = code.trim().toUpperCase();
         if (!cleanCode) return;
 
-        const itemIndex = orderItems.findIndex(i => i.code === cleanCode);
+        const exists = orderItems.some(i => i.code === cleanCode);
 
-        if (itemIndex !== -1) {
-            const item = orderItems[itemIndex];
-            
+        if (exists) {
             // Si el modal de escaneo continuo está abierto, sumamos +1 automáticamente para agilidad
             if (auditScannerOpen) {
-                updateItemQuantity(item, 1);
+                updateItemQuantity(cleanCode, 1);
                 Vibration.vibrate(50);
             } else {
                 // Si es escaneo normal (desde el botón o DataWedge sin modal), preguntamos cantidad
                 setScannerOpen(false);
-                setSelectedItem(item);
+                // Para el modal de cantidad mostramos solo la primera línea (referencia)
+                const firstLine = orderItems.find(i => i.code === cleanCode);
+                setSelectedItem(firstLine);
                 setTempQty('1');
                 setShowQtyModal(true);
                 Vibration.vibrate(50);
@@ -179,40 +179,86 @@ const PickingScreen = ({ navigation }) => {
     };
 
     const handleManualQty = (code, totalQty) => {
-        const item = orderItems.find(i => i.code === code);
-        if (!item) return;
+        const lines = orderItems.filter(i => i.code === code);
+        if (!lines.length) return;
 
-        // 1. Calcular la diferencia entre lo nuevo y lo que ya se había escaneado para ese ítem
-        const currentTotalScanned = item.qty_scan;
+        // Calcular el total escaneado actual en todas las líneas del ítem
+        const currentTotalScanned = lines.reduce((sum, l) => sum + l.qty_scan, 0);
         const diffToAdd = totalQty - currentTotalScanned;
 
-        // 2. Actualizar el estado global
-        updateItemQuantity(item, diffToAdd);
+        if (diffToAdd !== 0) {
+            updateItemQuantity(code, diffToAdd);
+        }
     };
 
-    const updateItemQuantity = (item, qtyToAdd) => {
-        // 1. Update overall order items
-        setOrderItems(prev => prev.map(i => {
-            if (i.code === item.code) {
-                const updatedQtyScan = i.qty_scan + qtyToAdd;
-                return {
-                    ...i,
-                    qty_scan: updatedQtyScan,
-                    difference: updatedQtyScan - i.qty_req
-                };
-            }
-            return i;
-        }));
+    /**
+     * Distribuye `qtyToAdd` entre todas las líneas del ítem con ese `itemCode`.
+     * Si qtyToAdd > 0: llena las líneas en orden (primera incompleta primero).
+     * Si qtyToAdd < 0: vacía desde la última línea hacia atrás.
+     * El excedente (sobre qty_req total) se acumula en la primera línea.
+     */
+    const updateItemQuantity = (itemCode, qtyToAdd) => {
+        setOrderItems(prev => {
+            if (qtyToAdd === 0) return prev;
 
-        // 2. Update package assignments
+            const updated = prev.map(i => ({ ...i }));
+            const lineIndices = updated.reduce((acc, item, idx) => {
+                if (item.code === itemCode) acc.push(idx);
+                return acc;
+            }, []);
+
+            if (lineIndices.length === 0) return prev;
+
+            let remaining = qtyToAdd;
+
+            if (remaining > 0) {
+                // Distribuir de la primera a la última línea
+                for (const idx of lineIndices) {
+                    if (remaining <= 0) break;
+                    const line = updated[idx];
+                    const space = line.qty_req - line.qty_scan;
+                    if (space > 0) {
+                        const toAdd = Math.min(space, remaining);
+                        line.qty_scan += toAdd;
+                        remaining -= toAdd;
+                    }
+                }
+                // Si todavía queda remanente (exceso sobre el total requerido),
+                // acumularlo en la primera línea
+                if (remaining > 0) {
+                    updated[lineIndices[0]].qty_scan += remaining;
+                }
+            } else {
+                // Restar desde la última línea hacia la primera
+                let toRemove = Math.abs(remaining);
+                for (const idx of [...lineIndices].reverse()) {
+                    if (toRemove <= 0) break;
+                    const line = updated[idx];
+                    const canRemove = Math.min(line.qty_scan, toRemove);
+                    line.qty_scan -= canRemove;
+                    toRemove -= canRemove;
+                }
+            }
+
+            // Recalcular difference en todas las líneas del ítem
+            for (const idx of lineIndices) {
+                updated[idx].difference = updated[idx].qty_scan - updated[idx].qty_req;
+            }
+
+            return updated;
+        });
+
+        // Actualizar asignaciones de bulto
         setPackageAssignments(prev => {
             const newAssignments = { ...prev };
-            const itemCode = item.code;
             if (!newAssignments[itemCode]) {
                 newAssignments[itemCode] = {};
             }
             const pkgKey = currentPackage.toString();
-            newAssignments[itemCode][pkgKey] = (newAssignments[itemCode][pkgKey] || 0) + qtyToAdd;
+            const current = newAssignments[itemCode][pkgKey] || 0;
+            const newVal = current + qtyToAdd;
+            // Nunca dejar valor negativo en el bulto
+            newAssignments[itemCode][pkgKey] = Math.max(0, newVal);
             return newAssignments;
         });
     };
@@ -224,9 +270,17 @@ const PickingScreen = ({ navigation }) => {
             return;
         }
 
-        updateItemQuantity(selectedItem, qtyToAdd);
+        const itemCode = selectedItem.code;
+        updateItemQuantity(itemCode, qtyToAdd);
 
-        if (selectedItem.qty_scan + qtyToAdd > selectedItem.qty_req) {
+        // Comprobar si el total escaneado excederá el total requerido en todas las líneas
+        const totalReq = orderItems
+            .filter(i => i.code === itemCode)
+            .reduce((sum, i) => sum + i.qty_req, 0);
+        const totalScan = orderItems
+            .filter(i => i.code === itemCode)
+            .reduce((sum, i) => sum + i.qty_scan, 0);
+        if (totalScan + qtyToAdd > totalReq) {
             Vibration.vibrate([0, 100, 50, 100]);
         }
 

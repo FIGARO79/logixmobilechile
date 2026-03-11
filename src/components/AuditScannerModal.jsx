@@ -28,7 +28,7 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
     const [isFlashOn, setIsFlashOn] = useState(false);
     const [isActive, setIsActive] = useState(false);
     const [scannedHistory, setScannedHistory] = useState([]);
-    
+
     // Estados para edición de cantidad
     const [editingItem, setEditingItem] = useState(null);
     const [manualQty, setManualQty] = useState('');
@@ -65,11 +65,11 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
             if (codes.length > 0 && codes[0].value) {
                 const code = codes[0].value.trim().toUpperCase();
                 lastScanTime.current = now;
-                
+
                 Vibration.vibrate(100);
-                
+
                 const item = orderItems.find(i => i.code === code);
-                
+
                 if (item) {
                     setScannedHistory(prev => {
                         const filtered = prev.filter(h => h.code !== code);
@@ -104,25 +104,46 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
         setEditingItem(null);
     };
 
-    const renderScannedItem = ({ item }) => (
-        <TouchableOpacity 
-            style={styles.historyItem} 
-            onPress={() => handleOpenEdit(item)}
-            activeOpacity={0.7}
-        >
-            <View style={styles.historyInfo}>
-                <Text style={styles.historyCode}>{item.code}</Text>
-                <Text style={styles.historyDesc} numberOfLines={1}>{item.description}</Text>
-            </View>
-            <View style={styles.historyRight}>
-                <View style={styles.editBadge}>
-                    <Icon name="pencil" size={12} color="#0854a0" />
-                    <Text style={styles.editText}>Editar Qty</Text>
+    const renderScannedItem = ({ item }) => {
+        const orderItem = orderItems.find(i => i.code === item.code);
+        const totalQtyScan = orderItems
+            .filter(i => i.code === item.code)
+            .reduce((sum, i) => sum + i.qty_scan, 0);
+        const totalQtyReq = orderItems
+            .filter(i => i.code === item.code)
+            .reduce((sum, i) => sum + i.qty_req, 0);
+        const isComplete = totalQtyScan >= totalQtyReq && totalQtyReq > 0;
+        const isOver = totalQtyScan > totalQtyReq;
+
+        return (
+            <TouchableOpacity
+                style={styles.historyItem}
+                onPress={() => handleOpenEdit(item)}
+                activeOpacity={0.7}
+            >
+                <View style={styles.historyInfo}>
+                    <Text style={styles.historyCode}>{item.code}</Text>
+                    <Text style={styles.historyDesc} numberOfLines={1}>{item.description}</Text>
                 </View>
-                <Text style={styles.historyTime}>{item.timestamp}</Text>
-            </View>
-        </TouchableOpacity>
-    );
+                <View style={styles.historyRight}>
+                    <View style={[
+                        styles.qtyBadge,
+                        isOver ? styles.qtyBadgeOver : isComplete ? styles.qtyBadgeComplete : styles.qtyBadgePartial
+                    ]}>
+                        <Text style={[
+                            styles.qtyBadgeText,
+                            isOver ? styles.qtyBadgeTextOver : isComplete ? styles.qtyBadgeTextComplete : styles.qtyBadgeTextPartial
+                        ]}>{totalQtyScan}</Text>
+                    </View>
+                    <View style={styles.editBadge}>
+                        <Icon name="pencil" size={12} color="#0854a0" />
+                        <Text style={styles.editText}>Editar Qty</Text>
+                    </View>
+                    <Text style={styles.historyTime}>{item.timestamp}</Text>
+                </View>
+            </TouchableOpacity>
+        );
+    };
 
     if (!visible) return null;
 
@@ -148,12 +169,12 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
                             <Text style={styles.loadingText}>Cargando cámara...</Text>
                         </View>
                     )}
-                    
+
                     <View style={styles.cameraOverlay}>
                         <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
                             <Icon name="close" size={28} color="#fff" />
                         </TouchableOpacity>
-                        
+
                         <View style={styles.packageBadge}>
                             <Text style={styles.packageBadgeText}>Bulto {currentPackage}</Text>
                         </View>
@@ -182,7 +203,9 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
                 <View style={styles.listContainer}>
                     <View style={styles.listHeader}>
                         <Text style={styles.listTitle}>Ítems Escaneados</Text>
-                        <Text style={styles.listCount}>{scannedHistory.length} lecturas</Text>
+                        <Text style={styles.listCount}>
+                            {orderItems.reduce((sum, i) => sum + i.qty_scan, 0)} lecturas
+                        </Text>
                     </View>
 
                     <FlatList
@@ -212,20 +235,20 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
                                 onChangeText={setManualQty}
                                 keyboardType="numeric"
                                 autoFocus
-                                placeholder="Ej: 20"
+                                placeholder="Cantidad"
                                 placeholderTextColor="#94a3b8"
                                 returnKeyType="done"
                                 onSubmitEditing={handleConfirmQty}
                             />
                             <View style={styles.qtyButtons}>
-                                <TouchableOpacity 
-                                    style={[styles.qtyBtn, styles.qtyBtnCancel]} 
+                                <TouchableOpacity
+                                    style={[styles.qtyBtn, styles.qtyBtnCancel]}
                                     onPress={() => setShowQtyInput(false)}
                                 >
                                     <Text style={styles.qtyBtnTextCancel}>Cancelar</Text>
                                 </TouchableOpacity>
-                                <TouchableOpacity 
-                                    style={[styles.qtyBtn, styles.qtyBtnConfirm]} 
+                                <TouchableOpacity
+                                    style={[styles.qtyBtn, styles.qtyBtnConfirm]}
                                     onPress={handleConfirmQty}
                                 >
                                     <Text style={styles.qtyBtnTextConfirm}>Confirmar</Text>
@@ -241,8 +264,8 @@ const AuditScannerModal = ({ visible, orderItems, onScan, onManualQty, onClose, 
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
-    cameraContainer: { 
-        height: SCREEN_HEIGHT * 0.45, 
+    cameraContainer: {
+        height: SCREEN_HEIGHT * 0.45,
         backgroundColor: '#000',
         overflow: 'hidden'
     },
@@ -299,7 +322,7 @@ const styles = StyleSheet.create({
     guideCornerTR: { position: 'absolute', top: 0, right: 0, width: 20, height: 20, borderTopWidth: 3, borderRightWidth: 3, borderColor: '#fff' },
     guideCornerBL: { position: 'absolute', bottom: 0, left: 0, width: 20, height: 20, borderBottomWidth: 3, borderLeftWidth: 3, borderColor: '#fff' },
     guideCornerBR: { position: 'absolute', bottom: 0, right: 0, width: 20, height: 20, borderBottomWidth: 3, borderRightWidth: 3, borderColor: '#fff' },
-    
+
     listContainer: {
         flex: 1,
         backgroundColor: '#fff',
@@ -335,6 +358,21 @@ const styles = StyleSheet.create({
     historyDesc: { fontSize: 11, color: '#64748b', marginTop: 2 },
     historyRight: { alignItems: 'flex-end', gap: 4 },
     historyTime: { fontSize: 10, color: '#94a3b8' },
+    qtyBadge: {
+        minWidth: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 6,
+    },
+    qtyBadgePartial: { backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#cbd5e1' },
+    qtyBadgeComplete: { backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#86efac' },
+    qtyBadgeOver: { backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fcd34d' },
+    qtyBadgeText: { fontSize: 14, fontWeight: 'bold' },
+    qtyBadgeTextPartial: { color: '#475569' },
+    qtyBadgeTextComplete: { color: '#16a34a' },
+    qtyBadgeTextOver: { color: '#d97706' },
     editBadge: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -350,7 +388,7 @@ const styles = StyleSheet.create({
     emptyContainer: { alignItems: 'center', justifyContent: 'center', padding: 40 },
     emptyText: { marginTop: 10, color: '#94a3b8', fontSize: 14, textAlign: 'center', fontWeight: 'bold' },
     emptySubtext: { marginTop: 5, color: '#94a3b8', fontSize: 12, textAlign: 'center' },
-    
+
     qtyOverlay: {
         position: 'absolute',
         top: 0,
