@@ -1,15 +1,26 @@
-import React, { useContext, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Vibration } from 'react-native';
+import React, { useContext, useState, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Vibration } from 'react-native';
 import { AuthContext } from '../context/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 const LoginScreen = () => {
-    const { login, biometricLogin, isLoading, isBiometricAvailable, biometryType } = useContext(AuthContext);
+    const { login, biometricLogin, isLoading, isBiometricAvailable, isBiometricEnabled, biometryType } = useContext(AuthContext);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [isPasswordVisible, setIsPasswordVisible] = useState(false);
     const [error, setError] = useState('');
+
+    // Lanzar biometría automáticamente al abrir la pantalla si ya está habilitada
+    useEffect(() => {
+        if (isBiometricAvailable && isBiometricEnabled) {
+            const timer = setTimeout(() => {
+                handleBiometricLogin();
+            }, 400); // Pequeño delay para que la pantalla termine de montar
+            return () => clearTimeout(timer);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isBiometricAvailable, isBiometricEnabled]);
 
     const handleLogin = async () => {
         if (!username || !password) {
@@ -35,6 +46,9 @@ const LoginScreen = () => {
         }
     };
 
+    const biometricIcon = biometryType === 'FaceID' ? 'face-recognition' : 'fingerprint';
+    const biometricLabel = biometryType === 'FaceID' ? 'Face ID' : 'Huella digital';
+
     return (
         <SafeAreaView style={styles.container}>
             <View style={styles.content}>
@@ -45,6 +59,17 @@ const LoginScreen = () => {
                         <Text style={styles.errorText}>{error}</Text>
                     </View>
                 ) : null}
+
+                {/* Indicador de biometría activa */}
+                {isBiometricAvailable && isBiometricEnabled && (
+                    <TouchableOpacity style={styles.biometricBanner} onPress={handleBiometricLogin} disabled={isLoading}>
+                        <Icon name={biometricIcon} size={22} color="#0070d2" />
+                        <Text style={styles.biometricBannerText}>
+                            Toca para entrar con {biometricLabel}
+                        </Text>
+                        <Icon name="chevron-right" size={20} color="#0070d2" />
+                    </TouchableOpacity>
+                )}
 
                 <View style={styles.inputContainer}>
                     <Text style={styles.label}>Usuario</Text>
@@ -74,7 +99,7 @@ const LoginScreen = () => {
                             onPress={() => setIsPasswordVisible(!isPasswordVisible)}
                         >
                             <Icon
-                                name={isPasswordVisible ? "eye-off" : "eye"}
+                                name={isPasswordVisible ? 'eye-off' : 'eye'}
                                 size={28}
                                 color="#666"
                             />
@@ -97,18 +122,25 @@ const LoginScreen = () => {
 
                     {isBiometricAvailable && (
                         <TouchableOpacity
-                            style={styles.biometricButton}
+                            style={[styles.biometricButton, !isBiometricEnabled && styles.biometricButtonDisabled]}
                             onPress={handleBiometricLogin}
                             disabled={isLoading}
                         >
-                            <Icon 
-                                name={biometryType === 'FaceID' ? "face-recognition" : "fingerprint"} 
-                                size={32} 
-                                color="#0070d2" 
+                            <Icon
+                                name={biometricIcon}
+                                size={32}
+                                color={isBiometricEnabled ? '#0070d2' : '#bbb'}
                             />
                         </TouchableOpacity>
                     )}
                 </View>
+
+                {/* Hint cuando biometría aún no está configurada */}
+                {isBiometricAvailable && !isBiometricEnabled && (
+                    <Text style={styles.biometricHint}>
+                        Inicia sesión una vez para activar el acceso con {biometricLabel}
+                    </Text>
+                )}
             </View>
         </SafeAreaView>
     );
@@ -127,8 +159,26 @@ const styles = StyleSheet.create({
         fontSize: 32,
         fontWeight: 'bold',
         color: '#2c3e50',
-        marginBottom: 40,
+        marginBottom: 28,
         textAlign: 'center',
+    },
+    biometricBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#e8f4fc',
+        borderWidth: 1,
+        borderColor: '#bee3f8',
+        borderRadius: 10,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginBottom: 20,
+        gap: 10,
+    },
+    biometricBannerText: {
+        flex: 1,
+        color: '#0070d2',
+        fontSize: 15,
+        fontWeight: '600',
     },
     inputContainer: {
         marginBottom: 20,
@@ -177,7 +227,7 @@ const styles = StyleSheet.create({
         padding: 20,
         borderRadius: 8,
         alignItems: 'center',
-        shadowColor: "#000",
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.1,
         shadowRadius: 4,
@@ -192,6 +242,10 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
+    biometricButtonDisabled: {
+        borderColor: '#ddd',
+        backgroundColor: '#fafafa',
+    },
     buttonDisabled: {
         opacity: 0.7,
     },
@@ -199,6 +253,12 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 20,
         fontWeight: 'bold',
+    },
+    biometricHint: {
+        marginTop: 16,
+        textAlign: 'center',
+        color: '#999',
+        fontSize: 13,
     },
     errorContainer: {
         backgroundColor: '#fee2e2',
