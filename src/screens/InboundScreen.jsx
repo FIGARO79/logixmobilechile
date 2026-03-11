@@ -452,7 +452,7 @@ const styles = StyleSheet.create({
     rowCentered: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     inputGroup: { marginBottom: 12 },
     inputLabel: { fontSize: 12, fontWeight: '600', color: '#666', marginBottom: 6 },
-    input: { backgroundColor: '#f5f5f5', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 16, fontSize: 16, color: '#000' },
+    input: { backgroundColor: '#f5f5f5', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, fontSize: 16, color: '#000' },
     inputDisabled: { backgroundColor: '#e9ecef', color: '#6c757d' },
     monoText: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
     iconButton: { backgroundColor: '#354a5f', width: 56, height: 56, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
