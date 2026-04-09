@@ -2,7 +2,7 @@ import axios from 'axios';
 import axiosRetry from 'axios-retry';
 
 // Backend VPS Address
-const API_URL = 'https://logixapp.dev';
+const API_URL = 'https://logixapp.online';
 
 const client = axios.create({
     baseURL: API_URL,
