@@ -11,7 +11,9 @@ import {
     Platform,
     ScrollView,
     Vibration,
+    Modal,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAxiosError } from 'axios';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -26,6 +28,14 @@ interface W2WSession {
     id?: number;
     session_id?: number;
     user_username?: string;
+    stockroom?: string;
+}
+
+interface W2WStockroomsResponse {
+    stockrooms?: string[];
+    all_stockrooms?: string[];
+    assigned_stockrooms?: string[];
+    stages_by_stockroom?: Record<string, number>;
 }
 
 interface W2WItemData {
@@ -49,8 +59,19 @@ export interface W2WCountProps {
     navigation?: NativeStackNavigationProp<RootStackParamList, 'W2W'>;
 }
 
+const W2W_STOCKROOM_KEY = 'w2w_stockroom';
+
 const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
-    // Stage & Session Info
+    // Stockroom & Stage & Session Info
+    const [stockroom, setStockroom] = useState<string>('01');
+    const [availableStockrooms, setAvailableStockrooms] = useState<string[]>([
+        '01',
+    ]);
+    const [stagesByStockroom, setStagesByStockroom] = useState<
+        Record<string, number>
+    >({});
+    const [loadingStockrooms, setLoadingStockrooms] = useState(false);
+    const [stockroomModalOpen, setStockroomModalOpen] = useState(false);
     const [stage, setStage] = useState(1); // 1: Conteo Gral, 2: Reconteo, 3: Conciliación
     const [activeSession, setActiveSession] = useState<W2WSession | null>(null);
     const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
@@ -84,12 +105,46 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     const itemInputRef = useRef<TextInput | null>(null);
     const qtyInputRef = useRef<TextInput | null>(null);
 
-    // Fetch Active Session for User
+    // Fetch available stockrooms & stages
+    const fetchStockrooms = useCallback(async () => {
+        setLoadingStockrooms(true);
+        try {
+            const res = await client.get<W2WStockroomsResponse>(
+                '/api/w2w/stockrooms'
+            );
+            const data = res.data;
+            if (!data) return;
+
+            if (
+                Array.isArray(data.stockrooms) &&
+                data.stockrooms.length > 0
+            ) {
+                const list = data.stockrooms;
+                setAvailableStockrooms(list);
+                setStockroom((prev) => (list.includes(prev) ? prev : list[0]));
+            }
+            if (
+                data.stages_by_stockroom &&
+                typeof data.stages_by_stockroom === 'object'
+            ) {
+                setStagesByStockroom(data.stages_by_stockroom);
+            }
+        } catch (e) {
+            console.error('Error al obtener bodegas W2W:', e);
+        } finally {
+            setLoadingStockrooms(false);
+        }
+    }, []);
+
+    // Fetch Active Session for User & Stockroom
     const fetchActiveSession =
         useCallback(async (): Promise<W2WSession | null> => {
             setLoadingSession(true);
             try {
-                const res = await client.get<W2WSession>('/api/sessions/active');
+                const res = await client.get<W2WSession>(
+                    '/api/sessions/active',
+                    { params: { stockroom } }
+                );
                 if (res.data && (res.data.id || res.data.session_id)) {
                     const sId = res.data.id || res.data.session_id || null;
                     setActiveSession(res.data);
@@ -108,51 +163,65 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             } finally {
                 setLoadingSession(false);
             }
-        }, []);
+        }, [stockroom]);
 
     // Fetch Stage Info
     const fetchSummary = useCallback(async () => {
         setLoadingSummary(true);
         try {
-            const res = await client.get<{ stage?: number | null }>(
-                '/api/admin/inventory/summary'
-            );
+            const res = await client.get<{
+                stage?: number | null;
+                stages_by_stockroom?: Record<string, number>;
+            }>('/api/admin/inventory/summary', { params: { stockroom } });
             if (res.data) {
                 setStage(
                     res.data.stage !== undefined && res.data.stage !== null
                         ? Number(res.data.stage)
                         : 0
                 );
+                if (
+                    res.data.stages_by_stockroom &&
+                    typeof res.data.stages_by_stockroom === 'object'
+                ) {
+                    setStagesByStockroom(res.data.stages_by_stockroom);
+                }
             }
         } catch (e) {
             console.error('Error al obtener estado de inventario W2W:', e);
         } finally {
             setLoadingSummary(false);
         }
-    }, []);
+    }, [stockroom]);
 
     // Fetch Stage 2 Recount List
     const fetchRecounts = useCallback(async () => {
         setLoadingRecounts(true);
         try {
             const res = await client.get<{ items?: W2WItemData[] }>(
-                '/api/recount_list/active'
+                '/api/recount_list/active',
+                { params: { stockroom } }
             );
             if (res.data && res.data.items) {
                 setRecountItems(res.data.items);
+            } else {
+                setRecountItems([]);
             }
         } catch (e) {
             console.error('Error al cargar lista de reconteos:', e);
         } finally {
             setLoadingRecounts(false);
         }
-    }, []);
+    }, [stockroom]);
 
     // Start New Count Session
     const handleStartSession = async (): Promise<W2WSession | null> => {
         setLoadingSession(true);
         try {
-            const res = await client.post<W2WSession>('/api/sessions/start');
+            const res = await client.post<W2WSession>(
+                '/api/sessions/start',
+                null,
+                { params: { stockroom } }
+            );
             if (res.data && (res.data.id || res.data.session_id)) {
                 const sId = res.data.id || res.data.session_id || null;
                 setActiveSession(res.data);
@@ -160,7 +229,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 Vibration.vibrate(70);
                 Alert.alert(
                     'Éxito',
-                    `Sesión #${sId} de inventario iniciada correctamente.`
+                    `Sesión #${sId} de inventario iniciada en Bodega ${stockroom}.`
                 );
                 fetchSummary();
                 return res.data;
@@ -228,6 +297,47 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         );
     };
 
+    const handleSelectStockroom = useCallback(
+        (nextStockroom: string) => {
+            if (nextStockroom === stockroom) {
+                setStockroomModalOpen(false);
+                return;
+            }
+            setStockroom(nextStockroom);
+            setStockroomModalOpen(false);
+            setItemCode('');
+            setDescription('');
+            setBinSys('');
+            setItemData(null);
+            setCountedQty('');
+            setRecountItems([]);
+            setShowRecountList(false);
+            AsyncStorage.setItem(W2W_STOCKROOM_KEY, nextStockroom).catch(
+                () => {}
+            );
+        },
+        [stockroom]
+    );
+
+    useEffect(() => {
+        let mounted = true;
+        AsyncStorage.getItem(W2W_STOCKROOM_KEY)
+            .then((saved) => {
+                if (mounted && saved) {
+                    setStockroom(saved);
+                }
+            })
+            .catch(() => {})
+            .finally(() => {
+                if (mounted) {
+                    fetchStockrooms();
+                }
+            });
+        return () => {
+            mounted = false;
+        };
+    }, [fetchStockrooms]);
+
     useEffect(() => {
         fetchSummary();
         fetchActiveSession();
@@ -248,7 +358,8 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         let shouldFocusQty = false;
         try {
             const res = await client.get<W2WItemData>(
-                `/api/get_item_for_counting/${encodeURIComponent(code)}`
+                `/api/get_item_for_counting/${encodeURIComponent(code)}`,
+                { params: { stockroom } }
             );
             if (res.data) {
                 setItemCode(res.data.item_code);
@@ -371,6 +482,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         setIsSaving(true);
         const payload = {
             session_id: currentSessionId,
+            stockroom: stockroom || '01',
             item_code: codeClean,
             counted_qty: qtyNum,
             counted_location: locClean,
@@ -497,6 +609,47 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                             </Text>
                         </View>
                     </View>
+
+                    {/* Selector de Bodega (Stockroom) */}
+                    <TouchableOpacity
+                        style={styles.stockroomSelectorBtn}
+                        onPress={() => setStockroomModalOpen(true)}
+                        disabled={loadingStockrooms}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.stockroomSelectorLeft}>
+                            <Icon
+                                name="domain"
+                                size={16}
+                                color={fluent.colors.primary}
+                            />
+                            <Text style={styles.stockroomSelectorLabel}>
+                                BODEGA:
+                            </Text>
+                            <Text style={styles.stockroomSelectorValue}>
+                                {stockroom}
+                            </Text>
+                        </View>
+                        <View style={styles.stockroomSelectorRight}>
+                            {loadingStockrooms ? (
+                                <ActivityIndicator
+                                    size="small"
+                                    color={fluent.colors.primary}
+                                />
+                            ) : (
+                                <>
+                                    <Text style={styles.stockroomChangeText}>
+                                        Cambiar
+                                    </Text>
+                                    <Icon
+                                        name="chevron-down"
+                                        size={18}
+                                        color={fluent.colors.primary}
+                                    />
+                                </>
+                            )}
+                        </View>
+                    </TouchableOpacity>
 
                     {/* Estado de la Sesión de Conteo */}
                     {stage > 0 &&
@@ -655,18 +808,22 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                             />
                         </View>
                         <Text style={styles.inactiveTitle}>
-                            Sin Inventario W2W Activo
+                            Sin Inventario Activo en Bodega {stockroom}
                         </Text>
                         <Text style={styles.inactiveDesc}>
                             Actualmente no hay ninguna etapa de inventario
-                            Wall-to-Wall iniciada desde el servidor. El
-                            administrador debe activar la Etapa 1 en la
-                            plataforma web para habilitar el conteo físico.
+                            Wall-to-Wall iniciada para la Bodega {stockroom}.
+                            Puedes cambiar de bodega arriba o pedir al
+                            administrador que active la Etapa 1 en Admin
+                            Inventory.
                         </Text>
                         <View style={styles.inactiveActions}>
                             <TouchableOpacity
                                 style={styles.verifyBtn}
-                                onPress={fetchSummary}
+                                onPress={() => {
+                                    fetchStockrooms();
+                                    fetchSummary();
+                                }}
                                 disabled={loadingSummary}
                             >
                                 {loadingSummary ? (
@@ -939,6 +1096,98 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                     </>
                 )}
             </ScrollView>
+
+            {/* Selector de Bodega Modal */}
+            <Modal
+                visible={stockroomModalOpen}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setStockroomModalOpen(false)}
+            >
+                <View style={styles.modalBackdrop}>
+                    <View style={styles.modalCard}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>
+                                Seleccionar Bodega (Stockroom)
+                            </Text>
+                            <TouchableOpacity
+                                onPress={() => setStockroomModalOpen(false)}
+                                hitSlop={{
+                                    top: 10,
+                                    bottom: 10,
+                                    left: 10,
+                                    right: 10,
+                                }}
+                            >
+                                <Icon
+                                    name="close"
+                                    size={20}
+                                    color={fluent.colors.neutralSecondary}
+                                />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView style={styles.modalList}>
+                            {availableStockrooms.map((stk) => {
+                                const isSelected = stk === stockroom;
+                                const stg = stagesByStockroom[stk];
+                                const stgLabel =
+                                    stg === undefined
+                                        ? ''
+                                        : stg === 0
+                                          ? 'Sin iniciar'
+                                          : `Fase ${stg}`;
+                                return (
+                                    <TouchableOpacity
+                                        key={stk}
+                                        style={[
+                                            styles.modalOption,
+                                            isSelected &&
+                                                styles.modalOptionSelected,
+                                        ]}
+                                        onPress={() =>
+                                            handleSelectStockroom(stk)
+                                        }
+                                        activeOpacity={0.7}
+                                    >
+                                        <View
+                                            style={styles.modalOptionTextWrap}
+                                        >
+                                            <Text
+                                                style={[
+                                                    styles.modalOptionTitle,
+                                                    isSelected &&
+                                                        styles.modalOptionTitleSelected,
+                                                ]}
+                                            >
+                                                Bodega {stk}
+                                            </Text>
+                                            {stgLabel !== '' && (
+                                                <Text
+                                                    style={[
+                                                        styles.modalOptionSub,
+                                                        stg === 0
+                                                            ? styles.modalOptionSubInactive
+                                                            : styles.modalOptionSubActive,
+                                                    ]}
+                                                >
+                                                    {stgLabel}
+                                                </Text>
+                                            )}
+                                        </View>
+                                        {isSelected && (
+                                            <Icon
+                                                name="check-circle"
+                                                size={20}
+                                                color={fluent.colors.primary}
+                                            />
+                                        )}
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
 
             {/* Scanner Camera Modal */}
             <ScannerModal
@@ -1423,6 +1672,116 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: '600',
         color: fluent.colors.white,
+    },
+    stockroomSelectorBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: fluent.radius.xs,
+        backgroundColor: fluent.colors.neutralLighter,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+    },
+    stockroomSelectorLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    stockroomSelectorLabel: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: fluent.colors.neutralSecondary,
+    },
+    stockroomSelectorValue: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: fluent.colors.neutralPrimary,
+    },
+    stockroomSelectorRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+    },
+    stockroomChangeText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: fluent.colors.primary,
+    },
+    modalBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.45)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalCard: {
+        width: '100%',
+        maxWidth: 380,
+        maxHeight: '70%',
+        backgroundColor: fluent.colors.cardBg,
+        borderRadius: fluent.radius.sm,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        padding: 16,
+        ...fluent.shadows.card,
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: fluent.colors.neutralQuaternary,
+        marginBottom: 8,
+    },
+    modalTitle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: fluent.colors.neutralPrimary,
+    },
+    modalList: {
+        maxHeight: 320,
+    },
+    modalOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 11,
+        paddingHorizontal: 12,
+        borderRadius: fluent.radius.xs,
+        marginBottom: 6,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        backgroundColor: fluent.colors.white,
+    },
+    modalOptionSelected: {
+        borderColor: fluent.colors.primary,
+        backgroundColor: fluent.colors.primaryLighterAlt,
+    },
+    modalOptionTextWrap: {
+        flex: 1,
+        gap: 2,
+    },
+    modalOptionTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: fluent.colors.neutralPrimary,
+    },
+    modalOptionTitleSelected: {
+        color: fluent.colors.primary,
+    },
+    modalOptionSub: {
+        fontSize: 11,
+        fontWeight: '500',
+    },
+    modalOptionSubActive: {
+        color: '#065f46',
+    },
+    modalOptionSubInactive: {
+        color: fluent.colors.neutralSecondary,
     },
 });
 

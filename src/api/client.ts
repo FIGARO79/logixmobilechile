@@ -9,7 +9,7 @@ import { queueRequest } from '../utils/syncManager';
 import eventEmitter, { EVENTS } from '../utils/events';
 
 // Backend VPS Address
-const API_URL = 'https://logixapp.dev';
+const API_URL = 'https://logixapp.online';
 
 const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 let csrfToken: string | null = null;
