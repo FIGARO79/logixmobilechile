@@ -14,7 +14,7 @@ Este es un proyecto de React Native enfocado en la gestión logística y de inve
 ## Stack Tecnológico
 - **Core:** React Native 0.83.1 (React 19) con TypeScript.
 - **Navegación:** React Navigation (@react-navigation/native-stack).
-- **API:** Axios con un cliente centralizado en `src/api/client.js` (Base URL: `https://logixapp.online`).
+- **API:** Axios con un cliente centralizado en `src/api/client.js` (Base URL: `https://logixapp.dev`).
 - **Estado:** React Context API (ubicado en `src/context/`).
 - **Hardware:** Integración con Zebra DataWedge (`src/hooks/useDataWedge.js`) y Vision Camera.
 

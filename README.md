@@ -96,8 +96,10 @@ cd android && ./gradlew assembleRelease
 
 ### 3. Ubicación del archivo
 El APK generado se llamará `LogixMobile.apk` y se encontrará en:
-`android/app/build/outputs/apk/release/LogixMobile.apk`
 
+```bash
+android/app/build/outputs/apk/release/app-release.apk
+```
 
 ---
 

@@ -4,8 +4,8 @@
 
     <!-- Configuración específica para el dominio de producción -->
     <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">logixapp.online</domain>
-        <domain includeSubdomains="true">www.logixapp.online</domain>
+        <domain includeSubdomains="true">logixapp.dev</domain>
+        <domain includeSubdomains="true">www.logixapp.dev</domain>
     </domain-config>
 
     <!-- Permitir HTTP (Cleartext) para Metro Bundler (Debugging local) -->

@@ -82,6 +82,11 @@ android {
         variant.outputs.all {
             outputFileName = "LogixMobile.apk"
         }
+        if (variant.name == "release") {
+            variant.javaCompileProvider.get().doLast {
+                delete fileTree(dir: "${buildDir}/intermediates/javac/release/compileReleaseJavaWithJavac/classes/com/facebook/react/viewmanagers", include: "**/*.class")
+            }
+        }
     }
 
 }
