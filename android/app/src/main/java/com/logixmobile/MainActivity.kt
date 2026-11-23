@@ -25,14 +25,20 @@ class MainActivity : ReactActivity() {
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
+    setIntent(intent)
+
     if (intent.action == "com.logixmobile.SCAN_EVENT") {
+      // Soporta Zebra DataWedge y Datalogic Memor 11 (Intent Wedge)
       val decodedData = intent.getStringExtra("com.symbol.datawedge.data_string")
-      val scanMap = Arguments.createMap()
-      scanMap.putString("code", decodedData)
-      
-      this.reactInstanceManager.currentReactContext?.let { context ->
-        context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-          .emit("datawedge_broadcast_intent", scanMap)
+          ?: intent.getStringExtra("com.datalogic.decode.intentwedge.barcode_string")
+
+      if (!decodedData.isNullOrEmpty()) {
+        val scanMap = Arguments.createMap()
+        scanMap.putString("code", decodedData)
+
+        this.reactInstanceManager.currentReactContext?.let { context ->
+          context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("datawedge_broadcast_intent", scanMap)
       }
     }
   }
