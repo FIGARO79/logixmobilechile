@@ -53,6 +53,13 @@ interface RecentW2WCount {
     counted_qty: number;
     description: string;
     time: string;
+    offline?: boolean;
+}
+
+interface CachedW2WState {
+    stage: number;
+    activeSession: W2WSession | null;
+    activeSessionId: number | null;
 }
 
 export interface W2WCountProps {
@@ -60,8 +67,11 @@ export interface W2WCountProps {
 }
 
 const W2W_STOCKROOM_KEY = 'w2w_stockroom';
+const W2W_STOCKROOMS_LIST_KEY = 'w2w_available_stockrooms';
+const getMasterCacheKey = (stk: string) => `w2w_items_master_${stk}`;
+const getStateCacheKey = (stk: string) => `w2w_session_stage_${stk}`;
 
-const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
+export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     // Stockroom & Stage & Session Info
     const [stockroom, setStockroom] = useState<string>('01');
     const [availableStockrooms, setAvailableStockrooms] = useState<string[]>([
@@ -77,6 +87,12 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
     const [loadingSummary, setLoadingSummary] = useState(false);
     const [loadingSession, setLoadingSession] = useState(false);
+
+    // Local Master Cache (in-memory mirror of AsyncStorage for instant lookup)
+    const [masterCatalog, setMasterCatalog] = useState<
+        Record<string, W2WItemData>
+    >({});
+    const [syncingMaster, setSyncingMaster] = useState(false);
 
     // Form Capture State
     const [countedLocation, setCountedLocation] = useState('');
@@ -105,6 +121,129 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     const itemInputRef = useRef<TextInput | null>(null);
     const qtyInputRef = useRef<TextInput | null>(null);
 
+    // Persist local session/stage snapshot
+    const persistLocalState = useCallback(
+        async (
+            stk: string,
+            nextStage: number,
+            nextSession: W2WSession | null,
+            nextSessionId: number | null
+        ) => {
+            try {
+                const snapshot: CachedW2WState = {
+                    stage: nextStage,
+                    activeSession: nextSession,
+                    activeSessionId: nextSessionId,
+                };
+                await AsyncStorage.setItem(
+                    getStateCacheKey(stk),
+                    JSON.stringify(snapshot)
+                );
+            } catch (e) {
+                console.warn('[W2W Cache] Error guardando estado local:', e);
+            }
+        },
+        []
+    );
+
+    // Load cached master & state for current stockroom
+    const loadLocalCacheForStockroom = useCallback(async (stk: string) => {
+        try {
+            const [masterStr, stateStr] = await Promise.all([
+                AsyncStorage.getItem(getMasterCacheKey(stk)),
+                AsyncStorage.getItem(getStateCacheKey(stk)),
+            ]);
+
+            if (masterStr) {
+                setMasterCatalog(
+                    JSON.parse(masterStr) as Record<string, W2WItemData>
+                );
+            } else {
+                setMasterCatalog({});
+            }
+
+            if (stateStr) {
+                const parsedState = JSON.parse(stateStr) as CachedW2WState;
+                if (typeof parsedState.stage === 'number') {
+                    setStage(parsedState.stage);
+                }
+                if (parsedState.activeSession) {
+                    setActiveSession(parsedState.activeSession);
+                    setActiveSessionId(parsedState.activeSessionId);
+                }
+            }
+        } catch (e) {
+            console.warn('[W2W Cache] Error leyendo caché local:', e);
+        }
+    }, []);
+
+    // Download full master catalog for offline lookup
+    const syncMasterCatalog = useCallback(async (stk: string) => {
+        setSyncingMaster(true);
+        try {
+            // Endpoint recomendado en FastAPI: devuelve array o diccionario de ítems de la bodega
+            const res = await client.get<
+                W2WItemData[] | { items?: W2WItemData[] }
+            >('/api/w2w/items_master', {
+                params: { stockroom: stk },
+                timeout: 25000,
+            });
+
+            const rawList = Array.isArray(res.data)
+                ? res.data
+                : res.data?.items || [];
+
+            if (rawList.length > 0) {
+                const catalogMap: Record<string, W2WItemData> = {};
+                for (const item of rawList) {
+                    if (item.item_code) {
+                        const key = item.item_code.trim().toUpperCase();
+                        catalogMap[key] = {
+                            ...item,
+                            item_code: key,
+                            in_master: true,
+                        };
+                    }
+                }
+                setMasterCatalog(catalogMap);
+                await AsyncStorage.setItem(
+                    getMasterCacheKey(stk),
+                    JSON.stringify(catalogMap)
+                );
+                console.log(
+                    `[W2W Cache] Maestro sincronizado (${Object.keys(catalogMap).length} ítems)`
+                );
+            }
+        } catch {
+            // Si no hay red o el endpoint aún no existe, conserva la caché existente sin mostrar error
+            console.log(
+                '[W2W Cache] Usando catálogo local previamente guardado.'
+            );
+        } finally {
+            setSyncingMaster(false);
+        }
+    }, []);
+
+    // Upsert single item into local master cache
+    const cacheSingleMasterItem = useCallback(
+        async (stk: string, item: W2WItemData) => {
+            if (!item.item_code || item.in_master === false) return;
+            const key = item.item_code.trim().toUpperCase();
+            setMasterCatalog((prev) => {
+                const updated = {
+                    ...prev,
+                    [key]: { ...item, item_code: key, in_master: true },
+                };
+                AsyncStorage.setItem(
+                    getMasterCacheKey(stk),
+                    JSON.stringify(updated)
+                ).catch(() => {});
+                return updated;
+            });
+        },
+        []
+    );
+
     // Fetch available stockrooms & stages
     const fetchStockrooms = useCallback(async () => {
         setLoadingStockrooms(true);
@@ -122,6 +261,10 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 const list = data.stockrooms;
                 setAvailableStockrooms(list);
                 setStockroom((prev) => (list.includes(prev) ? prev : list[0]));
+                AsyncStorage.setItem(
+                    W2W_STOCKROOMS_LIST_KEY,
+                    JSON.stringify(list)
+                ).catch(() => {});
             }
             if (
                 data.stages_by_stockroom &&
@@ -130,7 +273,13 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 setStagesByStockroom(data.stages_by_stockroom);
             }
         } catch (e) {
-            console.error('Error al obtener bodegas W2W:', e);
+            console.warn('Error al obtener bodegas W2W (modo offline):', e);
+            const cachedList = await AsyncStorage.getItem(
+                W2W_STOCKROOMS_LIST_KEY
+            ).catch(() => null);
+            if (cachedList) {
+                setAvailableStockrooms(JSON.parse(cachedList) as string[]);
+            }
         } finally {
             setLoadingStockrooms(false);
         }
@@ -149,13 +298,22 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                     const sId = res.data.id || res.data.session_id || null;
                     setActiveSession(res.data);
                     setActiveSessionId(sId);
+                    persistLocalState(stockroom, stage, res.data, sId);
                     return res.data;
                 } else {
                     setActiveSession(null);
                     setActiveSessionId(null);
+                    persistLocalState(stockroom, stage, null, null);
                     return null;
                 }
             } catch (e) {
+                // Si falla por red, conservamos la sesión guardada localmente para permitir trabajo offline
+                if (isAxiosError(e) && !e.response) {
+                    console.log(
+                        '[W2W Offline] Sin red al verificar sesión; manteniendo sesión en caché.'
+                    );
+                    return activeSession;
+                }
                 console.error('Error al obtener sesión activa:', e);
                 setActiveSession(null);
                 setActiveSessionId(null);
@@ -163,7 +321,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             } finally {
                 setLoadingSession(false);
             }
-        }, [stockroom]);
+        }, [stockroom, stage, activeSession, persistLocalState]);
 
     // Fetch Stage Info
     const fetchSummary = useCallback(async () => {
@@ -174,10 +332,16 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 stages_by_stockroom?: Record<string, number>;
             }>('/api/admin/inventory/summary', { params: { stockroom } });
             if (res.data) {
-                setStage(
+                const nextStage =
                     res.data.stage !== undefined && res.data.stage !== null
                         ? Number(res.data.stage)
-                        : 0
+                        : 0;
+                setStage(nextStage);
+                persistLocalState(
+                    stockroom,
+                    nextStage,
+                    activeSession,
+                    activeSessionId
                 );
                 if (
                     res.data.stages_by_stockroom &&
@@ -187,11 +351,17 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 }
             }
         } catch (e) {
-            console.error('Error al obtener estado de inventario W2W:', e);
+            if (isAxiosError(e) && !e.response) {
+                console.log(
+                    '[W2W Offline] Sin red al verificar etapa; usando etapa local.'
+                );
+            } else {
+                console.error('Error al obtener estado de inventario W2W:', e);
+            }
         } finally {
             setLoadingSummary(false);
         }
-    }, [stockroom]);
+    }, [stockroom, activeSession, activeSessionId, persistLocalState]);
 
     // Fetch Stage 2 Recount List
     const fetchRecounts = useCallback(async () => {
@@ -207,7 +377,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 setRecountItems([]);
             }
         } catch (e) {
-            console.error('Error al cargar lista de reconteos:', e);
+            console.warn('Error al cargar lista de reconteos:', e);
         } finally {
             setLoadingRecounts(false);
         }
@@ -226,6 +396,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 const sId = res.data.id || res.data.session_id || null;
                 setActiveSession(res.data);
                 setActiveSessionId(sId);
+                persistLocalState(stockroom, stage, res.data, sId);
                 Vibration.vibrate(70);
                 Alert.alert(
                     'Éxito',
@@ -237,10 +408,14 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             return null;
         } catch (e) {
             console.error('Error al iniciar sesión:', e);
-            const msg = isAxiosError(e)
-                ? (e.response?.data as { detail?: string } | undefined)
-                      ?.detail || 'No se pudo iniciar la sesión de inventario.'
-                : 'No se pudo iniciar la sesión de inventario.';
+            const msg =
+                isAxiosError(e) && !e.response
+                    ? 'Sin conexión a internet. Debes iniciar sesión con red antes de entrar a zonas sin cobertura.'
+                    : isAxiosError(e)
+                      ? (e.response?.data as { detail?: string } | undefined)
+                            ?.detail ||
+                        'No se pudo iniciar la sesión de inventario.'
+                      : 'No se pudo iniciar la sesión de inventario.';
             Alert.alert('Error', msg);
             return null;
         } finally {
@@ -270,6 +445,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                             );
                             setActiveSession(null);
                             setActiveSessionId(null);
+                            persistLocalState(stockroom, stage, null, null);
                             Vibration.vibrate(70);
                             Alert.alert(
                                 'Éxito',
@@ -339,9 +515,18 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     }, [fetchStockrooms]);
 
     useEffect(() => {
-        fetchSummary();
-        fetchActiveSession();
-    }, [fetchSummary, fetchActiveSession]);
+        loadLocalCacheForStockroom(stockroom).then(() => {
+            fetchSummary();
+            fetchActiveSession();
+            syncMasterCatalog(stockroom);
+        });
+    }, [
+        stockroom,
+        loadLocalCacheForStockroom,
+        fetchSummary,
+        fetchActiveSession,
+        syncMasterCatalog,
+    ]);
 
     useEffect(() => {
         if (stage === 2) {
@@ -349,7 +534,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         }
     }, [stage, fetchRecounts]);
 
-    // Handle Item Search
+    // Handle Item Search (Online first, fallback to local master cache)
     const handleSearchItem = async (codeToSearch?: string) => {
         const code = (codeToSearch || itemCode || '').trim().toUpperCase();
         if (!code) return;
@@ -359,33 +544,50 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         try {
             const res = await client.get<W2WItemData>(
                 `/api/get_item_for_counting/${encodeURIComponent(code)}`,
-                { params: { stockroom } }
+                { params: { stockroom }, timeout: 5000 }
             );
             if (res.data) {
                 setItemCode(res.data.item_code);
                 setDescription(res.data.description || 'N/A');
                 setBinSys(res.data.bin_location || 'N/A');
                 setItemData(res.data);
+                cacheSingleMasterItem(stockroom, res.data);
                 Vibration.vibrate(70);
                 shouldFocusQty = true;
             }
         } catch (e) {
-            console.error('Error buscando artículo:', e);
-            Vibration.vibrate([0, 150, 100, 150]);
-            Alert.alert(
-                'Aviso',
-                'Ítem no hallado en catálogo local. Admitido como hallazgo W2W.'
-            );
-            setItemData({
-                item_code: code,
-                description: 'HALLAZGO (SIN REGISTRO EN MAESTRO)',
-                bin_location: 'N/A',
-                system_qty: 0,
-                in_master: false,
-            });
-            setDescription('HALLAZGO (SIN REGISTRO EN MAESTRO)');
-            setBinSys('N/A');
-            shouldFocusQty = true;
+            // Buscar primero en el maestro cacheado localmente antes de declarar hallazgo
+            const cachedItem = masterCatalog[code];
+            if (cachedItem) {
+                setItemCode(cachedItem.item_code);
+                setDescription(cachedItem.description || 'N/A');
+                setBinSys(cachedItem.bin_location || 'N/A');
+                setItemData({ ...cachedItem, in_master: true });
+                Vibration.vibrate(70);
+                shouldFocusQty = true;
+            } else {
+                const isNetworkDrop = isAxiosError(e) && !e.response;
+                Vibration.vibrate([0, 150, 100, 150]);
+                if (!isNetworkDrop) {
+                    Alert.alert(
+                        'Aviso',
+                        'Ítem no hallado en catálogo local. Admitido como hallazgo W2W.'
+                    );
+                }
+                const fallbackDesc = isNetworkDrop
+                    ? 'SIN RED (VERIFICAR AL SINCRONIZAR)'
+                    : 'HALLAZGO (SIN REGISTRO EN MAESTRO)';
+                setItemData({
+                    item_code: code,
+                    description: fallbackDesc,
+                    bin_location: 'N/A',
+                    system_qty: 0,
+                    in_master: false,
+                });
+                setDescription(fallbackDesc);
+                setBinSys('N/A');
+                shouldFocusQty = true;
+            }
         } finally {
             setLoadingItem(false);
             if (shouldFocusQty) {
@@ -419,10 +621,10 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         setScanTarget(null);
     };
 
-    // Zebra DataWedge Hardware Scanner Listener
+    // Zebra / Datalogic Hardware Scanner Listener
     useDataWedge((code, parsed) => handleScanResult(code, parsed));
 
-    // Save W2W Physical Count
+    // Save W2W Physical Count (Supports instant offline queueing)
     const handleSaveCount = async () => {
         const locClean = countedLocation.trim().toUpperCase();
         const codeClean = itemCode.trim().toUpperCase();
@@ -455,7 +657,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             return;
         }
 
-        // Verificar sesión activa antes de guardar
+        // Verificar sesión activa antes de guardar (usa caché local si no hay red)
         let currentSessionId = activeSessionId;
         if (!currentSessionId) {
             const active = await fetchActiveSession();
@@ -467,7 +669,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         if (!currentSessionId) {
             Alert.alert(
                 'Sin Sesión Activa',
-                'No tienes una sesión de inventario activa en el servidor. ¿Deseas iniciar una nueva sesión ahora?',
+                'No tienes una sesión de inventario activa. ¿Deseas iniciar una nueva sesión ahora?',
                 [
                     { text: 'Cancelar', style: 'cancel' },
                     {
@@ -496,7 +698,6 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             if (res.status === 200 || res.status === 201) {
                 Vibration.vibrate([0, 100, 50, 100]);
 
-                // Add to recent list
                 setRecentCounts((prev) => [
                     {
                         id: Date.now(),
@@ -508,6 +709,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                             hour: '2-digit',
                             minute: '2-digit',
                         }),
+                        offline: false,
                     },
                     ...prev.slice(0, 9),
                 ]);
@@ -524,6 +726,35 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 if (stage === 2) fetchRecounts();
             }
         } catch (e) {
+            // Si no hubo respuesta del servidor, client.ts ya encoló el POST en offline_sync_queue
+            if (isAxiosError(e) && !e.response) {
+                Vibration.vibrate([0, 80, 40, 80]);
+
+                setRecentCounts((prev) => [
+                    {
+                        id: Date.now(),
+                        item_code: codeClean,
+                        counted_location: locClean,
+                        counted_qty: qtyNum,
+                        description: description || 'N/A',
+                        time: new Date().toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                        }),
+                        offline: true,
+                    },
+                    ...prev.slice(0, 9),
+                ]);
+
+                setItemCode('');
+                setDescription('');
+                setBinSys('');
+                setItemData(null);
+                setCountedQty('');
+                setTimeout(() => itemInputRef.current?.focus(), 150);
+                return;
+            }
+
             console.error('Error guardando conteo W2W:', e);
             Vibration.vibrate([0, 200, 100, 200]);
             const msg = isAxiosError(e)
@@ -584,6 +815,7 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     };
 
     const stageInfo = getStageBadgeInfo(stage);
+    const cachedCount = Object.keys(masterCatalog).length;
 
     return (
         <KeyboardAvoidingView
@@ -608,6 +840,30 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                 {stageInfo.label}
                             </Text>
                         </View>
+                    </View>
+
+                    {/* Indicador de Caché Offline del Maestro */}
+                    <View style={styles.cacheStatusRow}>
+                        <Icon
+                            name={
+                                syncingMaster
+                                    ? 'cloud-sync-outline'
+                                    : 'database-check-outline'
+                            }
+                            size={14}
+                            color={fluent.colors.neutralSecondary}
+                        />
+                        <Text style={styles.cacheStatusText}>
+                            {syncingMaster
+                                ? 'Sincronizando maestro local...'
+                                : `Catálogo offline: ${cachedCount} ítems`}
+                        </Text>
+                        <TouchableOpacity
+                            onPress={() => syncMasterCatalog(stockroom)}
+                            disabled={syncingMaster}
+                        >
+                            <Text style={styles.cacheSyncLink}>Actualizar</Text>
+                        </TouchableOpacity>
                     </View>
 
                     {/* Selector de Bodega (Stockroom) */}
@@ -959,7 +1215,10 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                             {itemData && (
                                 <View style={styles.itemInfoCard}>
                                     <View style={styles.itemInfoRow}>
-                                        <Text selectable style={styles.itemInfoCode}>
+                                        <Text
+                                            selectable
+                                            style={styles.itemInfoCode}
+                                        >
                                             {itemData.item_code}
                                         </Text>
                                         <View
@@ -1056,7 +1315,10 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                             <View
                                                 style={styles.historySkuRow}
                                             >
-                                                <Text selectable style={styles.historySku}>
+                                                <Text
+                                                    selectable
+                                                    style={styles.historySku}
+                                                >
                                                     {c.item_code}
                                                 </Text>
                                                 <View
@@ -1073,6 +1335,21 @@ const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                                         {c.counted_location}
                                                     </Text>
                                                 </View>
+                                                {c.offline && (
+                                                    <View
+                                                        style={
+                                                            styles.offlineBadge
+                                                        }
+                                                    >
+                                                        <Text
+                                                            style={
+                                                                styles.offlineBadgeText
+                                                            }
+                                                        >
+                                                            COLA OFFLINE
+                                                        </Text>
+                                                    </View>
+                                                )}
                                             </View>
                                             <Text
                                                 style={styles.historyDesc}
@@ -1304,6 +1581,25 @@ const styles = StyleSheet.create({
         letterSpacing: 0.3,
         flex: 1,
         marginLeft: 8,
+    },
+    cacheStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        marginTop: 8,
+        paddingTop: 6,
+        borderTopWidth: 1,
+        borderTopColor: fluent.colors.neutralLighter,
+    },
+    cacheStatusText: {
+        flex: 1,
+        fontSize: 11,
+        color: fluent.colors.neutralSecondary,
+    },
+    cacheSyncLink: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: fluent.colors.primary,
     },
     badge: {
         paddingHorizontal: 8,
@@ -1586,6 +1882,19 @@ const styles = StyleSheet.create({
         fontSize: 10,
         fontWeight: '600',
         color: fluent.colors.primaryDark,
+    },
+    offlineBadge: {
+        backgroundColor: fluent.colors.warningLight,
+        borderWidth: 1,
+        borderColor: fluent.colors.warningBorder,
+        paddingHorizontal: 5,
+        paddingVertical: 1,
+        borderRadius: fluent.radius.xs,
+    },
+    offlineBadgeText: {
+        fontSize: 9,
+        fontWeight: '700',
+        color: fluent.colors.warningText,
     },
     historyDesc: {
         fontSize: 11,
