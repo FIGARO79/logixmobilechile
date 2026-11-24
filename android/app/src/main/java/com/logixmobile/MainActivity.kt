@@ -39,6 +39,7 @@ class MainActivity : ReactActivity() {
         this.reactInstanceManager.currentReactContext?.let { context ->
           context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit("datawedge_broadcast_intent", scanMap)
+        }
       }
     }
   }

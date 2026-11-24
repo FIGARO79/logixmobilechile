@@ -10,8 +10,10 @@ import {
     KeyboardAvoidingView,
     Platform,
     ScrollView,
+    FlatList,
     Vibration,
     Modal,
+    AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAxiosError } from 'axios';
@@ -20,7 +22,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import client from '../api/client';
 import ScannerModal from './ScannerModal';
 import useDataWedge from '../hooks/useDataWedge';
-import { ParsedBarcode } from '../utils/barcodeParser';
+import { parseBarcode } from '../utils/barcodeParser';
 import fluent from '../theme/fluent';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
@@ -44,6 +46,8 @@ interface W2WItemData {
     bin_location?: string;
     system_qty?: number;
     in_master?: boolean;
+    is_recounted?: boolean;
+    counted_qty_in_stage?: number;
 }
 
 interface RecentW2WCount {
@@ -68,8 +72,87 @@ export interface W2WCountProps {
 
 const W2W_STOCKROOM_KEY = 'w2w_stockroom';
 const W2W_STOCKROOMS_LIST_KEY = 'w2w_available_stockrooms';
+const MASTER_CHUNK_SIZE = 1000;
 const getMasterCacheKey = (stk: string) => `w2w_items_master_${stk}`;
+const getMasterChunksCountKey = (stk: string) => `w2w_items_master_${stk}_chunks`;
+const getMasterChunkKey = (stk: string, idx: number) =>
+    `w2w_items_master_${stk}_chunk_${idx}`;
+const getMasterExtraKey = (stk: string) => `w2w_items_master_${stk}_extra`;
 const getStateCacheKey = (stk: string) => `w2w_session_stage_${stk}`;
+
+async function saveMasterCatalogChunked(
+    stk: string,
+    catalogMap: Record<string, W2WItemData>
+): Promise<void> {
+    const entries = Object.entries(catalogMap);
+    const chunkCount = Math.ceil(entries.length / MASTER_CHUNK_SIZE);
+    const pairs: [string, string][] = [
+        [getMasterChunksCountKey(stk), String(chunkCount)],
+    ];
+    for (let i = 0; i < chunkCount; i++) {
+        const sliceObj = Object.fromEntries(
+            entries.slice(i * MASTER_CHUNK_SIZE, (i + 1) * MASTER_CHUNK_SIZE)
+        );
+        pairs.push([getMasterChunkKey(stk, i), JSON.stringify(sliceObj)]);
+    }
+    await AsyncStorage.multiSet(pairs);
+    // Eliminar clave antigua monolítica para evitar CursorWindow en Android
+    await AsyncStorage.removeItem(getMasterCacheKey(stk)).catch(() => {});
+}
+
+async function loadMasterCatalogChunked(
+    stk: string
+): Promise<Record<string, W2WItemData>> {
+    const countStr = await AsyncStorage.getItem(getMasterChunksCountKey(stk));
+    const merged: Record<string, W2WItemData> = {};
+
+    if (countStr) {
+        const count = parseInt(countStr, 10) || 0;
+        if (count > 0) {
+            const keys = Array.from({ length: count }, (_, i) =>
+                getMasterChunkKey(stk, i)
+            );
+            const rows = await AsyncStorage.multiGet(keys);
+            for (const [, val] of rows) {
+                if (val) {
+                    Object.assign(
+                        merged,
+                        JSON.parse(val) as Record<string, W2WItemData>
+                    );
+                }
+            }
+        }
+    } else {
+        try {
+            const legacy = await AsyncStorage.getItem(getMasterCacheKey(stk));
+            if (legacy) {
+                Object.assign(
+                    merged,
+                    JSON.parse(legacy) as Record<string, W2WItemData>
+                );
+            }
+        } catch {
+            // Si la clave antigua excede 2MB (CursorWindow), eliminarla
+            await AsyncStorage.removeItem(getMasterCacheKey(stk)).catch(
+                () => {}
+            );
+        }
+    }
+
+    try {
+        const extraStr = await AsyncStorage.getItem(getMasterExtraKey(stk));
+        if (extraStr) {
+            Object.assign(
+                merged,
+                JSON.parse(extraStr) as Record<string, W2WItemData>
+            );
+        }
+    } catch {
+        // Ignorar si extra falla
+    }
+
+    return merged;
+}
 
 export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     // Stockroom & Stage & Session Info
@@ -82,6 +165,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     >({});
     const [loadingStockrooms, setLoadingStockrooms] = useState(false);
     const [stockroomModalOpen, setStockroomModalOpen] = useState(false);
+    const [hasConfirmedStockroom, setHasConfirmedStockroom] = useState(false);
     const [stage, setStage] = useState(1); // 1: Conteo Gral, 2: Reconteo, 3: Conciliación
     const [activeSession, setActiveSession] = useState<W2WSession | null>(null);
     const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
@@ -105,10 +189,17 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     const [isSaving, setIsSaving] = useState(false);
     const [recentCounts, setRecentCounts] = useState<RecentW2WCount[]>([]);
 
-    // Stage 2 Recounts List
+    // Stage >= 2 Recounts List
     const [recountItems, setRecountItems] = useState<W2WItemData[]>([]);
     const [loadingRecounts, setLoadingRecounts] = useState(false);
-    const [showRecountList, setShowRecountList] = useState(false);
+    const [recountFilterTab, setRecountFilterTab] = useState<'pending' | 'all'>(
+        'pending'
+    );
+    const [recountSearch, setRecountSearch] = useState('');
+    const [recountModalItem, setRecountModalItem] =
+        useState<W2WItemData | null>(null);
+    const [recountModalLoc, setRecountModalLoc] = useState('');
+    const [recountModalQty, setRecountModalQty] = useState('');
 
     // Hardware & Camera Scanner
     const [scannerOpen, setScannerOpen] = useState(false);
@@ -120,6 +211,14 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     const locationInputRef = useRef<TextInput | null>(null);
     const itemInputRef = useRef<TextInput | null>(null);
     const qtyInputRef = useRef<TextInput | null>(null);
+    const stageRef = useRef(stage);
+    const activeSessionRef = useRef(activeSession);
+    const activeSessionIdRef = useRef(activeSessionId);
+    const phaseAlertShownRef = useRef(false);
+
+    stageRef.current = stage;
+    activeSessionRef.current = activeSession;
+    activeSessionIdRef.current = activeSessionId;
 
     // Persist local session/stage snapshot
     const persistLocalState = useCallback(
@@ -149,18 +248,12 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     // Load cached master & state for current stockroom
     const loadLocalCacheForStockroom = useCallback(async (stk: string) => {
         try {
-            const [masterStr, stateStr] = await Promise.all([
-                AsyncStorage.getItem(getMasterCacheKey(stk)),
+            const [catalog, stateStr] = await Promise.all([
+                loadMasterCatalogChunked(stk),
                 AsyncStorage.getItem(getStateCacheKey(stk)),
             ]);
 
-            if (masterStr) {
-                setMasterCatalog(
-                    JSON.parse(masterStr) as Record<string, W2WItemData>
-                );
-            } else {
-                setMasterCatalog({});
-            }
+            setMasterCatalog(catalog);
 
             if (stateStr) {
                 const parsedState = JSON.parse(stateStr) as CachedW2WState;
@@ -199,17 +292,16 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                     if (item.item_code) {
                         const key = item.item_code.trim().toUpperCase();
                         catalogMap[key] = {
-                            ...item,
                             item_code: key,
+                            description: item.description,
+                            bin_location: item.bin_location,
+                            system_qty: item.system_qty,
                             in_master: true,
                         };
                     }
                 }
                 setMasterCatalog(catalogMap);
-                await AsyncStorage.setItem(
-                    getMasterCacheKey(stk),
-                    JSON.stringify(catalogMap)
-                );
+                await saveMasterCatalogChunked(stk, catalogMap);
                 console.log(
                     `[W2W Cache] Maestro sincronizado (${Object.keys(catalogMap).length} ítems)`
                 );
@@ -229,17 +321,29 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         async (stk: string, item: W2WItemData) => {
             if (!item.item_code || item.in_master === false) return;
             const key = item.item_code.trim().toUpperCase();
-            setMasterCatalog((prev) => {
-                const updated = {
-                    ...prev,
-                    [key]: { ...item, item_code: key, in_master: true },
-                };
-                AsyncStorage.setItem(
-                    getMasterCacheKey(stk),
-                    JSON.stringify(updated)
-                ).catch(() => {});
-                return updated;
-            });
+            const entry: W2WItemData = {
+                item_code: key,
+                description: item.description,
+                bin_location: item.bin_location,
+                system_qty: item.system_qty,
+                in_master: true,
+            };
+            setMasterCatalog((prev) => ({ ...prev, [key]: entry }));
+            try {
+                const extraStr = await AsyncStorage.getItem(
+                    getMasterExtraKey(stk)
+                );
+                const extraMap: Record<string, W2WItemData> = extraStr
+                    ? (JSON.parse(extraStr) as Record<string, W2WItemData>)
+                    : {};
+                extraMap[key] = entry;
+                await AsyncStorage.setItem(
+                    getMasterExtraKey(stk),
+                    JSON.stringify(extraMap)
+                );
+            } catch {
+                // Ignorar error de escritura en caché extra
+            }
         },
         []
     );
@@ -298,12 +402,12 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                     const sId = res.data.id || res.data.session_id || null;
                     setActiveSession(res.data);
                     setActiveSessionId(sId);
-                    persistLocalState(stockroom, stage, res.data, sId);
+                    persistLocalState(stockroom, stageRef.current, res.data, sId);
                     return res.data;
                 } else {
                     setActiveSession(null);
                     setActiveSessionId(null);
-                    persistLocalState(stockroom, stage, null, null);
+                    persistLocalState(stockroom, stageRef.current, null, null);
                     return null;
                 }
             } catch (e) {
@@ -312,7 +416,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                     console.log(
                         '[W2W Offline] Sin red al verificar sesión; manteniendo sesión en caché.'
                     );
-                    return activeSession;
+                    return activeSessionRef.current;
                 }
                 console.error('Error al obtener sesión activa:', e);
                 setActiveSession(null);
@@ -321,7 +425,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             } finally {
                 setLoadingSession(false);
             }
-        }, [stockroom, stage, activeSession, persistLocalState]);
+        }, [stockroom, persistLocalState]);
 
     // Fetch Stage Info
     const fetchSummary = useCallback(async () => {
@@ -340,8 +444,8 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 persistLocalState(
                     stockroom,
                     nextStage,
-                    activeSession,
-                    activeSessionId
+                    activeSessionRef.current,
+                    activeSessionIdRef.current
                 );
                 if (
                     res.data.stages_by_stockroom &&
@@ -361,9 +465,9 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         } finally {
             setLoadingSummary(false);
         }
-    }, [stockroom, activeSession, activeSessionId, persistLocalState]);
+    }, [stockroom, persistLocalState]);
 
-    // Fetch Stage 2 Recount List
+    // Fetch Stage >= 2 Recount List (filtered by assigned aisles on backend, sorted by bin location)
     const fetchRecounts = useCallback(async () => {
         setLoadingRecounts(true);
         try {
@@ -372,7 +476,25 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 { params: { stockroom } }
             );
             if (res.data && res.data.items) {
-                setRecountItems(res.data.items);
+                const sorted = [...res.data.items].sort((a, b) => {
+                    const recA = Boolean(a.is_recounted);
+                    const recB = Boolean(b.is_recounted);
+                    if (recA !== recB) return recA ? 1 : -1;
+                    const locA = (a.bin_location || '').trim().toUpperCase();
+                    const locB = (b.bin_location || '').trim().toUpperCase();
+                    const emptyA = !locA || locA === 'N/A';
+                    const emptyB = !locB || locB === 'N/A';
+                    if (emptyA !== emptyB) return emptyA ? 1 : -1;
+                    const cmp = locA.localeCompare(locB, undefined, {
+                        numeric: true,
+                        sensitivity: 'base',
+                    });
+                    if (cmp !== 0) return cmp;
+                    return (a.item_code || '').localeCompare(
+                        b.item_code || ''
+                    );
+                });
+                setRecountItems(sorted);
             } else {
                 setRecountItems([]);
             }
@@ -475,19 +597,22 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
 
     const handleSelectStockroom = useCallback(
         (nextStockroom: string) => {
+            setStockroomModalOpen(false);
+            phaseAlertShownRef.current = false;
+            setHasConfirmedStockroom(true);
             if (nextStockroom === stockroom) {
-                setStockroomModalOpen(false);
                 return;
             }
             setStockroom(nextStockroom);
-            setStockroomModalOpen(false);
             setItemCode('');
             setDescription('');
             setBinSys('');
             setItemData(null);
             setCountedQty('');
             setRecountItems([]);
-            setShowRecountList(false);
+            setRecountSearch('');
+            setRecountFilterTab('pending');
+            setRecountModalItem(null);
             AsyncStorage.setItem(W2W_STOCKROOM_KEY, nextStockroom).catch(
                 () => {}
             );
@@ -515,12 +640,14 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     }, [fetchStockrooms]);
 
     useEffect(() => {
+        if (!hasConfirmedStockroom) return;
         loadLocalCacheForStockroom(stockroom).then(() => {
             fetchSummary();
             fetchActiveSession();
             syncMasterCatalog(stockroom);
         });
     }, [
+        hasConfirmedStockroom,
         stockroom,
         loadLocalCacheForStockroom,
         fetchSummary,
@@ -529,15 +656,114 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     ]);
 
     useEffect(() => {
-        if (stage === 2) {
+        if (hasConfirmedStockroom && stage >= 2) {
             fetchRecounts();
         }
-    }, [stage, fetchRecounts]);
+    }, [hasConfirmedStockroom, stage, fetchRecounts]);
+
+    // Monitorear si la fase o sesión fue cerrada/cambiada en el servidor
+    const checkServerPhaseChange = useCallback(async () => {
+        if (!hasConfirmedStockroom || stageRef.current <= 0) return;
+        if (phaseAlertShownRef.current) return;
+
+        try {
+            const [summaryRes, sessionRes] = await Promise.all([
+                client.get<{ stage?: number | null }>(
+                    '/api/admin/inventory/summary',
+                    { params: { stockroom }, timeout: 5000 }
+                ),
+                client.get<W2WSession>('/api/sessions/active', {
+                    params: { stockroom },
+                    timeout: 5000,
+                }),
+            ]);
+
+            const prevStage = stageRef.current;
+            const nextStage =
+                summaryRes.data?.stage !== undefined &&
+                summaryRes.data?.stage !== null
+                    ? Number(summaryRes.data.stage)
+                    : 0;
+            const hadSession = activeSessionRef.current !== null;
+            const hasServerSession = Boolean(
+                sessionRes.data &&
+                    (sessionRes.data.id || sessionRes.data.session_id)
+            );
+
+            const stageChanged = prevStage > 0 && nextStage !== prevStage;
+            const sessionClosedRemotely = hadSession && !hasServerSession;
+
+            if (stageChanged || sessionClosedRemotely) {
+                phaseAlertShownRef.current = true;
+                setScannerOpen(false);
+                setRecountModalItem(null);
+                setRecountSearch('');
+                setRecountItems([]);
+                setStage(nextStage);
+                setActiveSession(null);
+                setActiveSessionId(null);
+                setItemCode('');
+                setDescription('');
+                setBinSys('');
+                setItemData(null);
+                setCountedQty('');
+                // Si el inventario finalizó (Fase 0), regresar a selección de bodega;
+                // si avanzó a otra fase (>= 1), quedarse en la bodega en la pantalla de Iniciar Sesión de la nueva fase.
+                if (nextStage === 0) {
+                    setHasConfirmedStockroom(false);
+                }
+                persistLocalState(stockroom, nextStage, null, null);
+                fetchStockrooms();
+                Vibration.vibrate([0, 150, 80, 150]);
+
+                const message =
+                    nextStage === 0
+                        ? `La fase de inventario en la Bodega ${stockroom} ha finalizado en el servidor.`
+                        : stageChanged
+                          ? `La Bodega ${stockroom} cambió a Fase ${nextStage}. Inicia sesión para continuar en la nueva fase.`
+                          : `La sesión de conteo en la Bodega ${stockroom} fue cerrada en el servidor.`;
+
+                Alert.alert('Fase Finalizada', message, [
+                    {
+                        text: 'Aceptar',
+                        onPress: () => {
+                            phaseAlertShownRef.current = false;
+                        },
+                    },
+                ]);
+            }
+        } catch {
+            // Si no hay red (modo offline), no interrumpir al usuario
+        }
+    }, [hasConfirmedStockroom, stockroom, persistLocalState, fetchStockrooms]);
+
+    useEffect(() => {
+        if (!hasConfirmedStockroom || stage <= 0) return;
+
+        const interval = setInterval(() => {
+            checkServerPhaseChange();
+        }, 10000);
+
+        const appStateSub = AppState.addEventListener('change', (nextState) => {
+            if (nextState === 'active') {
+                checkServerPhaseChange();
+            }
+        });
+
+        return () => {
+            clearInterval(interval);
+            appStateSub.remove();
+        };
+    }, [hasConfirmedStockroom, stage, checkServerPhaseChange]);
 
     // Handle Item Search (Online first, fallback to local master cache)
     const handleSearchItem = async (codeToSearch?: string) => {
-        const code = (codeToSearch || itemCode || '').trim().toUpperCase();
+        const rawCode = (codeToSearch || itemCode || '').trim();
+        if (!rawCode) return;
+        const parsed = parseBarcode(rawCode);
+        const code = (parsed.itemCode || rawCode).trim().toUpperCase();
         if (!code) return;
+        setItemCode(code);
 
         setLoadingItem(true);
         let shouldFocusQty = false;
@@ -598,31 +824,113 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         }
     };
 
+    // Handle Recount Search / Scan (Stage >= 2): auto-open modal on SKU or single-item BIN match
+    const handleRecountSearchSubmit = (rawInput?: string) => {
+        const raw = (rawInput ?? recountSearch).trim();
+        if (!raw) return;
+        const parsed = parseBarcode(raw);
+        const parsedSku = (parsed.itemCode || raw).trim().toUpperCase();
+        const parsedSkuNoZeros = parsedSku.replace(/^0+/, '');
+        const rawClean = raw.toUpperCase();
+
+        const matchesSku = (itemCodeVal?: string) => {
+            const code = (itemCodeVal || '').trim().toUpperCase();
+            if (!code) return false;
+            return (
+                code === parsedSku ||
+                (parsedSkuNoZeros.length > 0 &&
+                    code.replace(/^0+/, '') === parsedSkuNoZeros)
+            );
+        };
+
+        const skuMatch =
+            recountItems.find(
+                (it) => !it.is_recounted && matchesSku(it.item_code)
+            ) || recountItems.find((it) => matchesSku(it.item_code));
+
+        if (skuMatch) {
+            Vibration.vibrate(70);
+            setRecountSearch('');
+            openRecountModal(skuMatch);
+            return;
+        }
+
+        const binPendingMatches = recountItems.filter(
+            (it) =>
+                !it.is_recounted &&
+                (it.bin_location || '').trim().toUpperCase() === rawClean
+        );
+        if (binPendingMatches.length === 1) {
+            Vibration.vibrate(70);
+            setRecountSearch('');
+            openRecountModal(binPendingMatches[0]);
+            return;
+        }
+
+        const binAnyMatches =
+            binPendingMatches.length > 0
+                ? binPendingMatches
+                : recountItems.filter(
+                      (it) =>
+                          (it.bin_location || '').trim().toUpperCase() ===
+                          rawClean
+                  );
+        if (binAnyMatches.length > 0) {
+            Vibration.vibrate(70);
+            setRecountSearch(rawClean);
+            return;
+        }
+
+        // Si hay un único ítem pendiente que coincide parcialmente, abrir su modal
+        const partialPending = recountItems.filter(
+            (it) =>
+                !it.is_recounted &&
+                ((it.item_code || '').toUpperCase().includes(parsedSku) ||
+                    (it.bin_location || '').toUpperCase().includes(rawClean))
+        );
+        if (partialPending.length === 1) {
+            Vibration.vibrate(70);
+            setRecountSearch('');
+            openRecountModal(partialPending[0]);
+            return;
+        }
+
+        setRecountSearch(parsedSku);
+    };
+
     // Handle Hardware & Camera Scan Result
-    const handleScanResult = (
-        scannedCode: string,
-        parsedData?: ParsedBarcode
-    ) => {
+    const handleScanResult = (scannedCode: string) => {
         setScannerOpen(false);
+        if (!hasConfirmedStockroom || stage === 0 || !activeSession) return;
         if (!scannedCode) return;
-        const clean = scannedCode.trim().toUpperCase();
+
+        if (stage >= 2) {
+            if (recountModalItem) {
+                setRecountModalLoc(scannedCode.trim().toUpperCase());
+                Vibration.vibrate(70);
+            } else {
+                handleRecountSearchSubmit(scannedCode);
+            }
+            setScanTarget(null);
+            return;
+        }
+
+        const parsed = parseBarcode(scannedCode);
+        const clean = (parsed.itemCode || scannedCode).trim().toUpperCase();
 
         if (scanTarget === 'location' || (!countedLocation && !scanTarget)) {
-            setCountedLocation(clean);
+            setCountedLocation(scannedCode.trim().toUpperCase());
             Vibration.vibrate(70);
             setTimeout(() => itemInputRef.current?.focus(), 150);
         } else {
             setItemCode(clean);
             handleSearchItem(clean);
-            if (parsedData?.quantity) {
-                setCountedQty(String(parsedData.quantity));
-            }
         }
         setScanTarget(null);
     };
 
     // Zebra / Datalogic Hardware Scanner Listener
-    useDataWedge((code, parsed) => handleScanResult(code, parsed));
+    useDataWedge((code) => handleScanResult(code));
 
     // Save W2W Physical Count (Supports instant offline queueing)
     const handleSaveCount = async () => {
@@ -723,7 +1031,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 setTimeout(() => itemInputRef.current?.focus(), 150);
 
                 fetchSummary();
-                if (stage === 2) fetchRecounts();
+                if (stage >= 2) fetchRecounts();
             }
         } catch (e) {
             // Si no hubo respuesta del servidor, client.ts ya encoló el POST en offline_sync_queue
@@ -774,14 +1082,98 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         }
     };
 
-    // Select Recount Item (Stage 2)
-    const selectRecountItem = (item: W2WItemData) => {
-        if (item.bin_location && item.bin_location !== 'N/A') {
-            setCountedLocation(item.bin_location);
+    // Open Recount Capture Modal (Stage >= 2)
+    const openRecountModal = (item: W2WItemData) => {
+        setRecountModalItem(item);
+        setRecountModalLoc(
+            item.bin_location && item.bin_location !== 'N/A'
+                ? item.bin_location
+                : ''
+        );
+        setRecountModalQty('');
+    };
+
+    // Save Recount from Modal (Stage >= 2, supports offline queueing)
+    const handleSaveRecountModal = async () => {
+        if (!recountModalItem) return;
+        const locClean = recountModalLoc.trim().toUpperCase();
+        const qtyNum = parseInt(recountModalQty, 10);
+
+        if (!locClean) {
+            Alert.alert('Validación', 'Ingrese la ubicación física.');
+            return;
         }
-        setItemCode(item.item_code);
-        handleSearchItem(item.item_code);
-        setShowRecountList(false);
+        if (isNaN(qtyNum) || qtyNum < 0) {
+            Alert.alert(
+                'Validación',
+                'Ingrese una cantidad entera válida (>= 0).'
+            );
+            return;
+        }
+
+        const currentSessionId = activeSessionId;
+        if (!currentSessionId) {
+            Alert.alert('Sin Sesión', 'Inicie una sesión de inventario.');
+            return;
+        }
+
+        setIsSaving(true);
+        const codeClean = recountModalItem.item_code.trim().toUpperCase();
+        const payload = {
+            session_id: currentSessionId,
+            stockroom: stockroom || '01',
+            item_code: codeClean,
+            counted_qty: qtyNum,
+            counted_location: locClean,
+            description: recountModalItem.description || 'N/A',
+            bin_location_system: recountModalItem.bin_location || 'N/A',
+            timestamp: new Date().toISOString(),
+        };
+
+        try {
+            const res = await client.post('/api/w2w/save_count', payload);
+            if (res.status === 200 || res.status === 201) {
+                Vibration.vibrate([0, 100, 50, 100]);
+                setRecountItems((prev) =>
+                    prev.map((it) =>
+                        it.item_code === codeClean
+                            ? {
+                                  ...it,
+                                  is_recounted: true,
+                                  counted_qty_in_stage: qtyNum,
+                              }
+                            : it
+                    )
+                );
+                setRecountModalItem(null);
+                fetchSummary();
+                fetchRecounts();
+            }
+        } catch (e) {
+            if (isAxiosError(e) && !e.response) {
+                Vibration.vibrate([0, 80, 40, 80]);
+                setRecountItems((prev) =>
+                    prev.map((it) =>
+                        it.item_code === codeClean
+                            ? {
+                                  ...it,
+                                  is_recounted: true,
+                                  counted_qty_in_stage: qtyNum,
+                              }
+                            : it
+                    )
+                );
+                setRecountModalItem(null);
+                return;
+            }
+            const msg = isAxiosError(e)
+                ? (e.response?.data as { detail?: string } | undefined)
+                      ?.detail || 'No se pudo guardar el reconteo.'
+                : 'No se pudo guardar el reconteo.';
+            Alert.alert('Error al Guardar', msg);
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const getStageBadgeInfo = (stg: number) => {
@@ -815,24 +1207,210 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     };
 
     const stageInfo = getStageBadgeInfo(stage);
-    const cachedCount = Object.keys(masterCatalog).length;
+    const recountedTotalCount = recountItems.filter((it) => it.is_recounted).length;
+    const pendingTotalCount = recountItems.length - recountedTotalCount;
+    const recountSearchClean = recountSearch.trim().toUpperCase();
+    const filteredRecountItems = recountItems.filter((it) => {
+        if (recountFilterTab === 'pending' && it.is_recounted) return false;
+        if (!recountSearchClean) return true;
+        return (
+            (it.item_code || '').toUpperCase().includes(recountSearchClean) ||
+            (it.bin_location || '')
+                .toUpperCase()
+                .includes(recountSearchClean) ||
+            (it.description || '').toUpperCase().includes(recountSearchClean)
+        );
+    });
+
+    if (!hasConfirmedStockroom) {
+        return (
+            <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                style={styles.container}
+            >
+                <ScrollView
+                    contentContainerStyle={styles.scrollContent}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    <View style={styles.stockroomGateCard}>
+                        <View style={styles.stockroomGateHeader}>
+                            <View style={styles.stockroomGateIconWrap}>
+                                <Icon
+                                    name="warehouse"
+                                    size={26}
+                                    color={fluent.colors.primary}
+                                />
+                            </View>
+                            <View style={styles.flexOne}>
+                                <Text style={styles.stockroomGateTitle}>
+                                    SELECCIONAR BODEGA W2W
+                                </Text>
+                                <Text style={styles.stockroomGateSubtitle}>
+                                    Elige la bodega donde vas a contar antes de
+                                    habilitar el formulario de ingreso.
+                                </Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.stockroomGateToolbar}>
+                            <Text style={styles.stockroomGateCount}>
+                                {availableStockrooms.length} bodega(s)
+                                disponible(s)
+                            </Text>
+                            <TouchableOpacity
+                                style={styles.stockroomRefreshBtn}
+                                onPress={fetchStockrooms}
+                                disabled={loadingStockrooms}
+                            >
+                                {loadingStockrooms ? (
+                                    <ActivityIndicator
+                                        size="small"
+                                        color={fluent.colors.primary}
+                                    />
+                                ) : (
+                                    <>
+                                        <Icon
+                                            name="refresh"
+                                            size={15}
+                                            color={fluent.colors.primary}
+                                        />
+                                        <Text
+                                            style={
+                                                styles.stockroomRefreshText
+                                            }
+                                        >
+                                            Actualizar
+                                        </Text>
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Lista de bodegas */}
+                        {loadingStockrooms &&
+                        availableStockrooms.length === 0 ? (
+                            <ActivityIndicator
+                                size="large"
+                                color={fluent.colors.primary}
+                                style={styles.recountLoader}
+                            />
+                        ) : availableStockrooms.length === 0 ? (
+                            <View style={styles.stockroomEmptyBox}>
+                                <Icon
+                                    name="store-search-outline"
+                                    size={32}
+                                    color={fluent.colors.neutralTertiary}
+                                />
+                                <Text style={styles.stockroomEmptyText}>
+                                    No hay bodegas disponibles.
+                                </Text>
+                            </View>
+                        ) : (
+                            <View style={styles.stockroomGateList}>
+                                {availableStockrooms.map((stk) => {
+                                    const isLastUsed = stk === stockroom;
+                                    const stg = stagesByStockroom[stk];
+                                    const stgLabel =
+                                        stg === undefined
+                                            ? ''
+                                            : stg === 0
+                                              ? 'Sin iniciar'
+                                              : `Fase ${stg}`;
+                                    return (
+                                        <TouchableOpacity
+                                            key={stk}
+                                            style={[
+                                                styles.modalOption,
+                                                isLastUsed &&
+                                                    styles.modalOptionSelected,
+                                            ]}
+                                            onPress={() =>
+                                                handleSelectStockroom(stk)
+                                            }
+                                            activeOpacity={0.7}
+                                        >
+                                            <View
+                                                style={
+                                                    styles.modalOptionTextWrap
+                                                }
+                                            >
+                                                <View
+                                                    style={
+                                                        styles.stockroomOptionRow
+                                                    }
+                                                >
+                                                    <Text
+                                                        style={[
+                                                            styles.modalOptionTitle,
+                                                            isLastUsed &&
+                                                                styles.modalOptionTitleSelected,
+                                                        ]}
+                                                    >
+                                                        Bodega {stk}
+                                                    </Text>
+                                                    {isLastUsed && (
+                                                        <View
+                                                            style={
+                                                                styles.lastUsedBadge
+                                                            }
+                                                        >
+                                                            <Text
+                                                                style={
+                                                                    styles.lastUsedBadgeText
+                                                                }
+                                                            >
+                                                                Última usada
+                                                            </Text>
+                                                        </View>
+                                                    )}
+                                                </View>
+                                                {stgLabel !== '' && (
+                                                    <Text
+                                                        style={[
+                                                            styles.modalOptionSub,
+                                                            stg === 0
+                                                                ? styles.modalOptionSubInactive
+                                                                : styles.modalOptionSubActive,
+                                                        ]}
+                                                    >
+                                                        {stgLabel}
+                                                    </Text>
+                                                )}
+                                            </View>
+                                            <Icon
+                                                name="chevron-right"
+                                                size={22}
+                                                color={fluent.colors.primary}
+                                            />
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
+                        )}
+                    </View>
+                </ScrollView>
+            </KeyboardAvoidingView>
+        );
+    }
 
     return (
         <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             style={styles.container}
         >
-            <ScrollView
-                contentContainerStyle={styles.scrollContent}
-                keyboardShouldPersistTaps="handled"
-            >
-                {/* Header Banner Active Stage */}
+            <View style={styles.headerWrapper}>
+                {/* Header Banner Active Stage (Compacto) */}
                 <View style={styles.stageHeader}>
                     <View style={styles.stageTitleRow}>
-                        <Icon name="warehouse" size={22} color="#0284c7" />
-                        <Text style={styles.stageTitleText}>
+                        <Icon name="warehouse" size={17} color="#0284c7" />
+                        <Text style={styles.stageTitleText} numberOfLines={1}>
                             INVENTARIO W2W
                         </Text>
+                        <View style={styles.stockroomPill}>
+                            <Text style={styles.stockroomPillText}>
+                                BOD {stockroom}
+                            </Text>
+                        </View>
                         <View style={[styles.badge, stageInfo.badgeStyle]}>
                             <Text
                                 style={[styles.badgeText, stageInfo.textStyle]}
@@ -842,89 +1420,43 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                         </View>
                     </View>
 
-                    {/* Indicador de Caché Offline del Maestro */}
-                    <View style={styles.cacheStatusRow}>
-                        <Icon
-                            name={
-                                syncingMaster
-                                    ? 'cloud-sync-outline'
-                                    : 'database-check-outline'
-                            }
-                            size={14}
-                            color={fluent.colors.neutralSecondary}
-                        />
-                        <Text style={styles.cacheStatusText}>
-                            {syncingMaster
-                                ? 'Sincronizando maestro local...'
-                                : `Catálogo offline: ${cachedCount} ítems`}
-                        </Text>
-                        <TouchableOpacity
-                            onPress={() => syncMasterCatalog(stockroom)}
-                            disabled={syncingMaster}
-                        >
-                            <Text style={styles.cacheSyncLink}>Actualizar</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* Selector de Bodega (Stockroom) */}
-                    <TouchableOpacity
-                        style={styles.stockroomSelectorBtn}
-                        onPress={() => setStockroomModalOpen(true)}
-                        disabled={loadingStockrooms}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.stockroomSelectorLeft}>
+                    {/* Fila compacta: Catálogo offline + Sesión activa */}
+                    <View style={styles.headerMetaRow}>
+                        <View style={styles.cacheStatusInline}>
                             <Icon
-                                name="domain"
-                                size={16}
-                                color={fluent.colors.primary}
+                                name={
+                                    syncingMaster
+                                        ? 'cloud-sync-outline'
+                                        : 'database-check-outline'
+                                }
+                                size={13}
+                                color={fluent.colors.neutralSecondary}
                             />
-                            <Text style={styles.stockroomSelectorLabel}>
-                                BODEGA:
+                            <Text style={styles.cacheStatusText}>
+                                {syncingMaster
+                                    ? 'Sincronizando...'
+                                    : 'Catálogo offline'}
                             </Text>
-                            <Text style={styles.stockroomSelectorValue}>
-                                {stockroom}
-                            </Text>
-                        </View>
-                        <View style={styles.stockroomSelectorRight}>
-                            {loadingStockrooms ? (
-                                <ActivityIndicator
-                                    size="small"
-                                    color={fluent.colors.primary}
-                                />
-                            ) : (
-                                <>
-                                    <Text style={styles.stockroomChangeText}>
-                                        Cambiar
-                                    </Text>
-                                    <Icon
-                                        name="chevron-down"
-                                        size={18}
-                                        color={fluent.colors.primary}
-                                    />
-                                </>
-                            )}
-                        </View>
-                    </TouchableOpacity>
-
-                    {/* Estado de la Sesión de Conteo */}
-                    {stage > 0 &&
-                        (activeSession ? (
                             <TouchableOpacity
-                                style={styles.sessionActiveBadgeRow}
+                                onPress={() => syncMasterCatalog(stockroom)}
+                                disabled={syncingMaster}
+                            >
+                                <Text style={styles.cacheSyncLink}>
+                                    Actualizar
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        {stage > 0 && activeSession && (
+                            <TouchableOpacity
+                                style={styles.sessionCompactPill}
                                 onPress={handleCloseSession}
                                 disabled={loadingSession}
                                 activeOpacity={0.7}
                             >
                                 <View style={styles.sessionStatusDot} />
-                                <Text style={styles.sessionActiveText}>
-                                    Sesión #
-                                    {activeSession.id ||
-                                        activeSession.session_id}{' '}
-                                    activa
-                                    {activeSession.user_username
-                                        ? ` • ${activeSession.user_username}`
-                                        : ''}
+                                <Text style={styles.sessionCompactText}>
+                                    #{activeSession.id || activeSession.session_id}
                                 </Text>
                                 {loadingSession ? (
                                     <ActivityIndicator
@@ -933,128 +1465,239 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                         style={styles.sessionSpinner}
                                     />
                                 ) : (
-                                    <View style={styles.sessionClosePill}>
-                                        <Icon
-                                            name="close"
-                                            size={12}
-                                            color="#065f46"
-                                        />
-                                        <Text
-                                            style={styles.sessionClosePillText}
-                                        >
-                                            Cerrar
-                                        </Text>
-                                    </View>
+                                    <Icon
+                                        name="close-circle-outline"
+                                        size={13}
+                                        color="#065f46"
+                                    />
                                 )}
                             </TouchableOpacity>
-                        ) : (
-                            <View style={styles.sessionWarningRow}>
-                                <Icon
-                                    name="alert-circle-outline"
-                                    size={18}
-                                    color="#d97706"
-                                />
-                                <Text style={styles.sessionWarningText}>
-                                    Sin sesión de inventario activa
-                                </Text>
-                                <TouchableOpacity
-                                    style={styles.startSessionSmallBtn}
-                                    onPress={handleStartSession}
-                                    disabled={loadingSession}
-                                >
-                                    {loadingSession ? (
-                                        <ActivityIndicator
-                                            size="small"
-                                            color="#fff"
-                                        />
-                                    ) : (
-                                        <Text
-                                            style={
-                                                styles.startSessionSmallBtnText
-                                            }
-                                        >
-                                            INICIAR SESIÓN
-                                        </Text>
-                                    )}
-                                </TouchableOpacity>
-                            </View>
-                        ))}
+                        )}
+                    </View>
                 </View>
+            </View>
 
-                {/* Banner de alerta para Reconteos (Etapa 2) */}
-                {stage === 2 && (
-                    <TouchableOpacity
-                        style={styles.recountBanner}
-                        onPress={() => setShowRecountList(!showRecountList)}
-                    >
-                        <Icon
-                            name="clipboard-alert-outline"
-                            size={22}
-                            color="#b45309"
-                        />
-                        <View style={styles.recountBannerBody}>
-                            <Text style={styles.recountBannerTitle}>
-                                Reconteos Pendientes ({recountItems.length})
-                            </Text>
-                            <Text style={styles.recountBannerSub}>
-                                Toca para ver la lista de SKUs a verificar en
-                                Etapa 2
-                            </Text>
+                {stage >= 2 && activeSession ? (
+                    <View style={styles.recountScreenCard}>
+                        <View style={styles.recountScreenHeader}>
+                            <View style={styles.flexOne}>
+                                <Text style={styles.recountScreenTitle}>
+                                    Lista de Ítems a Recontar — Fase 0{stage}
+                                </Text>
+                                <Text style={styles.recountScreenSub}>
+                                    {recountedTotalCount} de{' '}
+                                    {recountItems.length} recontados (
+                                    {pendingTotalCount} pendientes)
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                onPress={fetchRecounts}
+                                disabled={loadingRecounts}
+                                style={styles.recountRefreshBtn}
+                            >
+                                {loadingRecounts ? (
+                                    <ActivityIndicator
+                                        size="small"
+                                        color={fluent.colors.primary}
+                                    />
+                                ) : (
+                                    <Icon
+                                        name="refresh"
+                                        size={18}
+                                        color={fluent.colors.primary}
+                                    />
+                                )}
+                            </TouchableOpacity>
                         </View>
-                        <Icon
-                            name={
-                                showRecountList ? 'chevron-up' : 'chevron-down'
-                            }
-                            size={24}
-                            color="#b45309"
-                        />
-                    </TouchableOpacity>
-                )}
 
-                {/* Lista Desplegable de Reconteos (Etapa 2) */}
-                {stage === 2 && showRecountList && (
-                    <View style={styles.recountListContainer}>
-                        {loadingRecounts ? (
-                            <ActivityIndicator
-                                size="small"
-                                color="#b45309"
-                                style={styles.recountLoader}
-                            />
-                        ) : recountItems.length === 0 ? (
-                            <Text style={styles.emptyRecountText}>
-                                No hay reconteos pendientes en su zona.
-                            </Text>
-                        ) : (
-                            recountItems.slice(0, 15).map((r, idx) => (
-                                <TouchableOpacity
-                                    key={idx}
-                                    style={styles.recountRow}
-                                    onPress={() => selectRecountItem(r)}
+                        {/* Buscador SKU o Ubicación */}
+                        <View style={styles.recountSearchRow}>
+                            <View style={styles.recountSearchBox}>
+                                <Icon
+                                    name="magnify"
+                                    size={17}
+                                    color={fluent.colors.neutralSecondary}
+                                />
+                                <TextInput
+                                    style={styles.recountSearchInput}
+                                    value={recountSearch}
+                                    onChangeText={setRecountSearch}
+                                    onSubmitEditing={(e) =>
+                                        handleRecountSearchSubmit(
+                                            e.nativeEvent.text
+                                        )
+                                    }
+                                    returnKeyType="search"
+                                    placeholder="Escanear o buscar SKU / Ubicación..."
+                                    placeholderTextColor={
+                                        fluent.colors.neutralTertiary
+                                    }
+                                    autoCapitalize="characters"
+                                    autoCorrect={false}
+                                />
+                                {recountSearch.length > 0 && (
+                                    <TouchableOpacity
+                                        onPress={() => setRecountSearch('')}
+                                    >
+                                        <Icon
+                                            name="close-circle"
+                                            size={17}
+                                            color={
+                                                fluent.colors.neutralTertiary
+                                            }
+                                        />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                            <TouchableOpacity
+                                style={styles.recountScanBtn}
+                                onPress={() => {
+                                    setScanTarget('item');
+                                    setScannerOpen(true);
+                                }}
+                                activeOpacity={0.7}
+                            >
+                                <Icon
+                                    name="barcode-scan"
+                                    size={26}
+                                    color={fluent.colors.primary}
+                                />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Tabs Pendientes / Todos */}
+                        <View style={styles.recountTabsRow}>
+                            <TouchableOpacity
+                                style={[
+                                    styles.recountTabBtn,
+                                    recountFilterTab === 'pending' &&
+                                        styles.recountTabBtnActive,
+                                ]}
+                                onPress={() => setRecountFilterTab('pending')}
+                            >
+                                <Text
+                                    style={[
+                                        styles.recountTabText,
+                                        recountFilterTab === 'pending' &&
+                                            styles.recountTabTextActive,
+                                    ]}
                                 >
+                                    Pendientes ({pendingTotalCount})
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[
+                                    styles.recountTabBtn,
+                                    recountFilterTab === 'all' &&
+                                        styles.recountTabBtnActive,
+                                ]}
+                                onPress={() => setRecountFilterTab('all')}
+                            >
+                                <Text
+                                    style={[
+                                        styles.recountTabText,
+                                        recountFilterTab === 'all' &&
+                                            styles.recountTabTextActive,
+                                    ]}
+                                >
+                                    Todos ({recountItems.length})
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <FlatList
+                            data={filteredRecountItems}
+                            keyExtractor={(item, idx) =>
+                                `${item.item_code}_${idx}`
+                            }
+                            style={styles.recountFlatList}
+                            keyboardShouldPersistTaps="handled"
+                            initialNumToRender={20}
+                            maxToRenderPerBatch={20}
+                            windowSize={5}
+                            ListEmptyComponent={
+                                loadingRecounts ? (
+                                    <ActivityIndicator
+                                        size="small"
+                                        color={fluent.colors.primary}
+                                        style={styles.recountLoader}
+                                    />
+                                ) : (
+                                    <Text style={styles.emptyRecountText}>
+                                        No hay ítems para mostrar en sus
+                                        pasillos asignados.
+                                    </Text>
+                                )
+                            }
+                            renderItem={({ item }) => (
+                                <View style={styles.recountTableRow}>
                                     <View style={styles.flexOne}>
-                                        <Text style={styles.recountSku}>
-                                            {r.item_code}
-                                        </Text>
+                                        <View style={styles.recountTopLine}>
+                                            <Text
+                                                selectable
+                                                style={styles.recountSku}
+                                            >
+                                                {item.item_code}
+                                            </Text>
+                                            <View style={styles.recountBinBadge}>
+                                                <Text
+                                                    selectable
+                                                    style={
+                                                        styles.recountBinText
+                                                    }
+                                                >
+                                                    {item.bin_location || 'N/A'}
+                                                </Text>
+                                            </View>
+                                            <View
+                                                style={[
+                                                    styles.recountStatusBadge,
+                                                    item.is_recounted
+                                                        ? styles.recountStatusDone
+                                                        : styles.recountStatusPending,
+                                                ]}
+                                            >
+                                                <Text
+                                                    style={[
+                                                        styles.recountStatusText,
+                                                        item.is_recounted
+                                                            ? styles.recountStatusTextDone
+                                                            : styles.recountStatusTextPending,
+                                                    ]}
+                                                >
+                                                    {item.is_recounted
+                                                        ? 'RECONTADO'
+                                                        : 'PENDIENTE'}
+                                                </Text>
+                                            </View>
+                                        </View>
                                         <Text
                                             style={styles.recountDesc}
                                             numberOfLines={1}
                                         >
-                                            {r.description}
+                                            {item.description || 'N/A'}
                                         </Text>
                                     </View>
-                                    <View style={styles.recountBinBadge}>
-                                        <Text style={styles.recountBinText}>
-                                            {r.bin_location || 'N/A'}
+                                    <TouchableOpacity
+                                        style={styles.recountActionBtn}
+                                        onPress={() => openRecountModal(item)}
+                                    >
+                                        <Text
+                                            style={styles.recountActionBtnText}
+                                        >
+                                            RECONTAR
                                         </Text>
-                                    </View>
-                                </TouchableOpacity>
-                            ))
-                        )}
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        />
                     </View>
-                )}
-
-                {/* Si no hay etapa activa (stage === 0), mostramos la pantalla de bloqueo */}
-                {stage === 0 ? (
+                ) : (
+                    <ScrollView
+                        contentContainerStyle={styles.scrollContent}
+                        keyboardShouldPersistTaps="handled"
+                    >
+                        {stage === 0 ? (
                     <View style={styles.inactiveCard}>
                         <View style={styles.inactiveIconCircle}>
                             <Icon
@@ -1100,6 +1743,19 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                     </>
                                 )}
                             </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.backBtn}
+                                onPress={() => setHasConfirmedStockroom(false)}
+                            >
+                                <Icon
+                                    name="swap-horizontal"
+                                    size={18}
+                                    color="#64748b"
+                                />
+                                <Text style={styles.backBtnText}>
+                                    SELECCIONAR OTRA BODEGA
+                                </Text>
+                            </TouchableOpacity>
                             {navigation && (
                                 <TouchableOpacity
                                     style={styles.backBtn}
@@ -1115,6 +1771,67 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                     </Text>
                                 </TouchableOpacity>
                             )}
+                        </View>
+                    </View>
+                ) : !activeSession ? (
+                    <View style={styles.inactiveCard}>
+                        <View style={styles.startSessionIconCircle}>
+                            <Icon
+                                name="play-circle-outline"
+                                size={48}
+                                color={fluent.colors.primary}
+                            />
+                        </View>
+                        <Text style={styles.inactiveTitle}>
+                            Iniciar Sesión — Bodega {stockroom}
+                        </Text>
+                        <Text style={styles.inactiveDesc}>
+                            Inicia una sesión de inventario en la Bodega{' '}
+                            {stockroom} para habilitar el formulario de captura
+                            física.
+                        </Text>
+                        <View style={styles.inactiveActions}>
+                            <TouchableOpacity
+                                style={styles.startSessionMainBtn}
+                                onPress={handleStartSession}
+                                disabled={loadingSession}
+                            >
+                                {loadingSession ? (
+                                    <ActivityIndicator
+                                        size="small"
+                                        color={fluent.colors.white}
+                                    />
+                                ) : (
+                                    <>
+                                        <Icon
+                                            name="play"
+                                            size={18}
+                                            color={fluent.colors.white}
+                                        />
+                                        <Text
+                                            style={
+                                                styles.startSessionMainBtnText
+                                            }
+                                        >
+                                            INICIAR SESIÓN (BODEGA {stockroom})
+                                        </Text>
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.backBtn}
+                                onPress={() => setHasConfirmedStockroom(false)}
+                                disabled={loadingSession}
+                            >
+                                <Icon
+                                    name="swap-horizontal"
+                                    size={18}
+                                    color="#64748b"
+                                />
+                                <Text style={styles.backBtnText}>
+                                    CAMBIAR DE BODEGA
+                                </Text>
+                            </TouchableOpacity>
                         </View>
                     </View>
                 ) : (
@@ -1372,7 +2089,77 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                         )}
                     </>
                 )}
-            </ScrollView>
+                    </ScrollView>
+                )}
+
+            {/* Modal de Captura de Reconteo (Etapa >= 2) */}
+            <Modal
+                visible={recountModalItem !== null}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setRecountModalItem(null)}
+            >
+                <View style={styles.modalBackdrop}>
+                    <View style={styles.modalCard}>
+                        <View style={styles.modalHeader}>
+                            <Text selectable style={styles.modalTitle}>
+                                Recontar — {recountModalItem?.item_code}
+                            </Text>
+                            <TouchableOpacity
+                                onPress={() => setRecountModalItem(null)}
+                            >
+                                <Icon
+                                    name="close"
+                                    size={20}
+                                    color={fluent.colors.neutralSecondary}
+                                />
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={styles.recountModalDesc} numberOfLines={2}>
+                            {recountModalItem?.description || 'N/A'}
+                        </Text>
+                        <Text style={styles.label}>UBICACIÓN FÍSICA (BIN) *</Text>
+                        <TextInput
+                            style={styles.recountModalInput}
+                            value={recountModalLoc}
+                            onChangeText={(v) =>
+                                setRecountModalLoc(v.toUpperCase())
+                            }
+                            autoCapitalize="characters"
+                            placeholder="Ej. A01-01"
+                        />
+                        <Text style={styles.label}>CANTIDAD CONTADA *</Text>
+                        <TextInput
+                            style={styles.recountModalInput}
+                            value={recountModalQty}
+                            onChangeText={setRecountModalQty}
+                            keyboardType="numeric"
+                            placeholder="0"
+                            autoFocus
+                            onSubmitEditing={handleSaveRecountModal}
+                        />
+                        <TouchableOpacity
+                            style={[
+                                styles.saveButton,
+                                isSaving && styles.saveButtonDisabled,
+                            ]}
+                            onPress={handleSaveRecountModal}
+                            disabled={isSaving}
+                        >
+                            {isSaving ? (
+                                <ActivityIndicator
+                                    size="small"
+                                    color="#fff"
+                                />
+                            ) : (
+                                <Text style={styles.saveButtonText}>
+                                    GUARDAR RECONTEO
+                                </Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
 
             {/* Selector de Bodega Modal */}
             <Modal
@@ -1488,8 +2275,8 @@ const styles = StyleSheet.create({
     recountLoader: { padding: 12 },
     historySkuRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     scrollContent: {
-        padding: 12,
-        paddingBottom: 30,
+        padding: 10,
+        paddingBottom: 24,
     },
     inactiveCard: {
         backgroundColor: fluent.colors.cardBg,
@@ -1563,8 +2350,9 @@ const styles = StyleSheet.create({
     stageHeader: {
         backgroundColor: fluent.colors.cardBg,
         borderRadius: fluent.radius.sm,
-        padding: 14,
-        marginBottom: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        marginBottom: 8,
         borderWidth: 1,
         borderColor: fluent.colors.neutralQuaternary,
         ...fluent.shadows.card,
@@ -1572,27 +2360,45 @@ const styles = StyleSheet.create({
     stageTitleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        gap: 6,
     },
     stageTitleText: {
-        fontSize: 14,
-        fontWeight: '600',
+        fontSize: 13,
+        fontWeight: '700',
         color: fluent.colors.neutralPrimary,
-        letterSpacing: 0.3,
+        letterSpacing: 0.2,
         flex: 1,
-        marginLeft: 8,
     },
-    cacheStatusRow: {
+    stockroomPill: {
+        backgroundColor: fluent.colors.primaryLighterAlt,
+        borderWidth: 1,
+        borderColor: fluent.colors.primaryLight,
+        borderRadius: fluent.radius.xs,
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+    },
+    stockroomPillText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: fluent.colors.primaryDarker,
+    },
+    headerMetaRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        marginTop: 8,
-        paddingTop: 6,
+        justifyContent: 'space-between',
+        marginTop: 6,
+        paddingTop: 5,
         borderTopWidth: 1,
         borderTopColor: fluent.colors.neutralLighter,
+        gap: 8,
+    },
+    cacheStatusInline: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        flex: 1,
     },
     cacheStatusText: {
-        flex: 1,
         fontSize: 11,
         color: fluent.colors.neutralSecondary,
     },
@@ -1600,6 +2406,22 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: '600',
         color: fluent.colors.primary,
+    },
+    sessionCompactPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: '#ecfdf5',
+        borderWidth: 1,
+        borderColor: '#a7f3d0',
+        borderRadius: fluent.radius.xs,
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+    },
+    sessionCompactText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#065f46',
     },
     badge: {
         paddingHorizontal: 8,
@@ -2091,6 +2913,293 @@ const styles = StyleSheet.create({
     },
     modalOptionSubInactive: {
         color: fluent.colors.neutralSecondary,
+    },
+    stockroomGateCard: {
+        backgroundColor: fluent.colors.cardBg,
+        borderRadius: fluent.radius.sm,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        padding: 16,
+        ...fluent.shadows.card,
+    },
+    stockroomGateHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        marginBottom: 14,
+    },
+    stockroomGateIconWrap: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: fluent.colors.primaryLighterAlt,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    stockroomGateTitle: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: fluent.colors.neutralPrimary,
+    },
+    stockroomGateSubtitle: {
+        fontSize: 12,
+        color: fluent.colors.neutralSecondary,
+        marginTop: 2,
+    },
+    stockroomFilterBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: fluent.colors.white,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        borderRadius: fluent.radius.xs,
+        paddingHorizontal: 10,
+        height: 42,
+        gap: 8,
+    },
+    stockroomFilterInput: {
+        flex: 1,
+        fontSize: 14,
+        color: fluent.colors.neutralPrimary,
+        paddingVertical: 0,
+    },
+    stockroomGateToolbar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 10,
+        marginBottom: 10,
+    },
+    stockroomGateCount: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: fluent.colors.neutralSecondary,
+    },
+    stockroomRefreshBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingVertical: 4,
+        paddingHorizontal: 8,
+    },
+    stockroomRefreshText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: fluent.colors.primary,
+    },
+    stockroomGateList: {
+        gap: 2,
+    },
+    stockroomOptionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    lastUsedBadge: {
+        backgroundColor: fluent.colors.primaryLighter,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
+    lastUsedBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: fluent.colors.primary,
+    },
+    stockroomEmptyBox: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 28,
+        gap: 8,
+    },
+    stockroomEmptyText: {
+        fontSize: 13,
+        color: fluent.colors.neutralSecondary,
+    },
+    startSessionIconCircle: {
+        width: 76,
+        height: 76,
+        borderRadius: 38,
+        backgroundColor: fluent.colors.primaryLighterAlt,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 14,
+    },
+    startSessionMainBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: fluent.colors.primary,
+        paddingVertical: 12,
+        paddingHorizontal: 18,
+        borderRadius: fluent.radius.xs,
+    },
+    startSessionMainBtnText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: fluent.colors.white,
+    },
+    recountScreenCard: {
+        flex: 1,
+        marginHorizontal: 10,
+        marginBottom: 10,
+        backgroundColor: fluent.colors.cardBg,
+        borderRadius: fluent.radius.sm,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        padding: 12,
+        ...fluent.shadows.card,
+    },
+    headerWrapper: {
+        paddingHorizontal: 10,
+        paddingTop: 10,
+    },
+    recountScreenHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 10,
+    },
+    recountScreenTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: fluent.colors.neutralPrimary,
+    },
+    recountScreenSub: {
+        fontSize: 11,
+        color: fluent.colors.neutralSecondary,
+        marginTop: 2,
+    },
+    recountRefreshBtn: {
+        padding: 6,
+    },
+    recountSearchRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 8,
+    },
+    recountSearchBox: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: fluent.colors.white,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        borderRadius: fluent.radius.xs,
+        paddingHorizontal: 10,
+        height: 42,
+        gap: 6,
+    },
+    recountScanBtn: {
+        width: 48,
+        height: 42,
+        borderRadius: fluent.radius.xs,
+        borderWidth: 1,
+        borderColor: fluent.colors.primaryLight,
+        backgroundColor: fluent.colors.primaryLighterAlt,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    recountSearchInput: {
+        flex: 1,
+        fontSize: 13,
+        color: fluent.colors.neutralPrimary,
+        paddingVertical: 0,
+    },
+    recountTabsRow: {
+        flexDirection: 'row',
+        gap: 8,
+        marginBottom: 10,
+    },
+    recountTabBtn: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: fluent.radius.xs,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        backgroundColor: fluent.colors.white,
+    },
+    recountTabBtnActive: {
+        backgroundColor: fluent.colors.primary,
+        borderColor: fluent.colors.primary,
+    },
+    recountTabText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: fluent.colors.neutralPrimary,
+    },
+    recountTabTextActive: {
+        color: fluent.colors.white,
+    },
+    recountFlatList: {
+        flex: 1,
+    },
+    recountTableRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 9,
+        paddingHorizontal: 4,
+        borderBottomWidth: 1,
+        borderBottomColor: fluent.colors.neutralLighter,
+        gap: 8,
+    },
+    recountTopLine: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginBottom: 2,
+    },
+    recountStatusBadge: {
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
+    recountStatusPending: {
+        backgroundColor: '#fef3c7',
+    },
+    recountStatusDone: {
+        backgroundColor: '#dcfce7',
+    },
+    recountStatusText: {
+        fontSize: 9,
+        fontWeight: '700',
+    },
+    recountStatusTextPending: {
+        color: '#92400e',
+    },
+    recountStatusTextDone: {
+        color: '#166534',
+    },
+    recountActionBtn: {
+        backgroundColor: fluent.colors.primary,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        borderRadius: fluent.radius.xs,
+    },
+    recountActionBtnText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: fluent.colors.white,
+    },
+    recountModalDesc: {
+        fontSize: 12,
+        color: fluent.colors.neutralSecondary,
+        marginBottom: 12,
+    },
+    recountModalInput: {
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        borderRadius: fluent.radius.xs,
+        paddingHorizontal: 10,
+        height: 42,
+        fontSize: 14,
+        color: fluent.colors.neutralPrimary,
+        backgroundColor: fluent.colors.white,
+        marginBottom: 12,
     },
 });
 

@@ -172,9 +172,9 @@ client.interceptors.response.use(
         if (!error.response) {
             // Error de red (sin respuesta del servidor)
             if (error.code === 'ECONNABORTED') {
-                console.error('[Network Error] Tiempo de espera agotado (Timeout).');
+                console.warn('[Network Error] Tiempo de espera agotado (Timeout).');
             } else {
-                console.error(`[Network Error] Sin respuesta del servidor: ${error.message}`);
+                console.warn(`[Network Error] Sin respuesta del servidor: ${error.message}`);
             }
 
             // --- Lógica de Sincronización Offline Automática ---
