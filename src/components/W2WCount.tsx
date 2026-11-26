@@ -1429,6 +1429,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             description: desc || 'N/A',
             bin_location_system: bin_location_system || 'N/A',
             timestamp: nowIso,
+            overwrite: true,
         };
 
         const countRecord: CountedItemRecord = {
