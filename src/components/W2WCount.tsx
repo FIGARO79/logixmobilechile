@@ -1,4 +1,10 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, {
+    useState,
+    useRef,
+    useEffect,
+    useCallback,
+    useContext,
+} from 'react';
 import {
     View,
     Text,
@@ -20,6 +26,9 @@ import { isAxiosError } from 'axios';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import client from '../api/client';
+import { SyncContext } from '../context/SyncContext';
+import { getPendingW2WKeys, queueRequest } from '../utils/syncManager';
+import eventEmitter, { EVENTS } from '../utils/events';
 import ScannerModal from './ScannerModal';
 import useDataWedge from '../hooks/useDataWedge';
 import { parseBarcode } from '../utils/barcodeParser';
@@ -66,6 +75,25 @@ interface CachedW2WState {
     activeSessionId: number | null;
 }
 
+interface CountedItemRecord {
+    item_code: string;
+    counted_location: string;
+    counted_qty: number;
+    description: string;
+    bin_location_system: string;
+    timestamp: string;
+    session_id: number | null;
+    stage?: number;
+}
+
+interface DuplicateCountPrompt {
+    item_code: string;
+    counted_location: string;
+    previous_qty: number;
+    description: string;
+    bin_location_system: string;
+}
+
 export interface W2WCountProps {
     navigation?: NativeStackNavigationProp<RootStackParamList, 'W2W'>;
 }
@@ -79,6 +107,10 @@ const getMasterChunkKey = (stk: string, idx: number) =>
     `w2w_items_master_${stk}_chunk_${idx}`;
 const getMasterExtraKey = (stk: string) => `w2w_items_master_${stk}_extra`;
 const getStateCacheKey = (stk: string) => `w2w_session_stage_${stk}`;
+const getCountedMapKey = (stk: string) => `w2w_counted_map_${stk}`;
+const getRecentCountsKey = (stk: string) => `w2w_recent_counts_${stk}`;
+const buildCountKey = (loc: string, code: string) =>
+    `${loc.trim().toUpperCase()}::${code.trim().toUpperCase()}`;
 
 async function saveMasterCatalogChunked(
     stk: string,
@@ -155,6 +187,10 @@ async function loadMasterCatalogChunked(
 }
 
 export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
+    const { isConnected } = useContext(SyncContext);
+    const isConnectedRef = useRef(isConnected);
+    isConnectedRef.current = isConnected;
+
     // Stockroom & Stage & Session Info
     const [stockroom, setStockroom] = useState<string>('01');
     const [availableStockrooms, setAvailableStockrooms] = useState<string[]>([
@@ -188,6 +224,18 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     const [loadingItem, setLoadingItem] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [recentCounts, setRecentCounts] = useState<RecentW2WCount[]>([]);
+    const [countedItemsMap, setCountedItemsMap] = useState<
+        Record<string, CountedItemRecord>
+    >({});
+    const countedItemsMapRef = useRef<Record<string, CountedItemRecord>>({});
+    countedItemsMapRef.current = countedItemsMap;
+
+    // Duplicate (BIN + SKU) Detection & Correction Modals
+    const [duplicatePrompt, setDuplicatePrompt] =
+        useState<DuplicateCountPrompt | null>(null);
+    const [correctionModalData, setCorrectionModalData] =
+        useState<DuplicateCountPrompt | null>(null);
+    const [correctionQty, setCorrectionQty] = useState('');
 
     // Stage >= 2 Recounts List
     const [recountItems, setRecountItems] = useState<W2WItemData[]>([]);
@@ -245,26 +293,161 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         []
     );
 
+    // Persist local counted items map & recent counts
+    const recordLocalCount = useCallback(
+        (
+            stk: string,
+            record: CountedItemRecord,
+            offline: boolean
+        ) => {
+            const key = buildCountKey(
+                record.counted_location,
+                record.item_code
+            );
+            const nextMap = {
+                ...countedItemsMapRef.current,
+                [key]: record,
+            };
+            countedItemsMapRef.current = nextMap;
+            setCountedItemsMap(nextMap);
+            AsyncStorage.setItem(
+                getCountedMapKey(stk),
+                JSON.stringify(nextMap)
+            ).catch(() => {});
+
+            const timeLabel = new Date().toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+            });
+            setRecentCounts((prev) => {
+                const filtered = prev.filter(
+                    (c) =>
+                        !(
+                            c.item_code.trim().toUpperCase() ===
+                                record.item_code &&
+                            c.counted_location.trim().toUpperCase() ===
+                                record.counted_location
+                        )
+                );
+                const nextRecent: RecentW2WCount[] = [
+                    {
+                        id: Date.now(),
+                        item_code: record.item_code,
+                        counted_location: record.counted_location,
+                        counted_qty: record.counted_qty,
+                        description: record.description || 'N/A',
+                        time: timeLabel,
+                        offline,
+                    },
+                    ...filtered.slice(0, 9),
+                ];
+                AsyncStorage.setItem(
+                    getRecentCountsKey(stk),
+                    JSON.stringify(nextRecent)
+                ).catch(() => {});
+                return nextRecent;
+            });
+        },
+        []
+    );
+
+    const findPreviousCount = useCallback(
+        (loc: string, code: string): CountedItemRecord | null => {
+            const key = buildCountKey(loc, code);
+            const existing = countedItemsMapRef.current[key];
+            if (!existing) return null;
+            if (
+                stageRef.current > 0 &&
+                existing.stage &&
+                existing.stage !== stageRef.current
+            ) {
+                return null;
+            }
+            return existing;
+        },
+        []
+    );
+
     // Load cached master & state for current stockroom
     const loadLocalCacheForStockroom = useCallback(async (stk: string) => {
         try {
-            const [catalog, stateStr] = await Promise.all([
-                loadMasterCatalogChunked(stk),
-                AsyncStorage.getItem(getStateCacheKey(stk)),
-            ]);
+            const [catalog, stateStr, countedMapStr, recentStr] =
+                await Promise.all([
+                    loadMasterCatalogChunked(stk),
+                    AsyncStorage.getItem(getStateCacheKey(stk)),
+                    AsyncStorage.getItem(getCountedMapKey(stk)),
+                    AsyncStorage.getItem(getRecentCountsKey(stk)),
+                ]);
 
             setMasterCatalog(catalog);
 
+            let restoredStage = stageRef.current;
             if (stateStr) {
                 const parsedState = JSON.parse(stateStr) as CachedW2WState;
                 if (typeof parsedState.stage === 'number') {
+                    restoredStage = parsedState.stage;
+                    stageRef.current = parsedState.stage;
                     setStage(parsedState.stage);
                 }
                 if (parsedState.activeSession) {
+                    activeSessionRef.current = parsedState.activeSession;
+                    activeSessionIdRef.current = parsedState.activeSessionId;
                     setActiveSession(parsedState.activeSession);
                     setActiveSessionId(parsedState.activeSessionId);
                 }
             }
+
+            const restoredMap: Record<string, CountedItemRecord> = {};
+            if (countedMapStr) {
+                const parsedMap = JSON.parse(countedMapStr) as Record<
+                    string,
+                    CountedItemRecord
+                >;
+                for (const [k, v] of Object.entries(parsedMap)) {
+                    if (
+                        restoredStage === 0 ||
+                        !v.stage ||
+                        v.stage === restoredStage
+                    ) {
+                        restoredMap[k] = v;
+                    }
+                }
+            }
+
+            if (recentStr) {
+                const parsedRecent = JSON.parse(recentStr) as RecentW2WCount[];
+                const pendingKeys = await getPendingW2WKeys(stk);
+                const reconciled = parsedRecent.map((item) => {
+                    const key = buildCountKey(
+                        item.counted_location,
+                        item.item_code
+                    );
+                    if (!restoredMap[key]) {
+                        restoredMap[key] = {
+                            item_code: item.item_code.trim().toUpperCase(),
+                            counted_location: item.counted_location
+                                .trim()
+                                .toUpperCase(),
+                            counted_qty: item.counted_qty,
+                            description: item.description || 'N/A',
+                            bin_location_system: 'N/A',
+                            timestamp: new Date().toISOString(),
+                            session_id: activeSessionIdRef.current,
+                            stage: restoredStage,
+                        };
+                    }
+                    if (!item.offline) return item;
+                    return pendingKeys.has(key)
+                        ? item
+                        : { ...item, offline: false };
+                });
+                setRecentCounts(reconciled);
+            } else {
+                setRecentCounts([]);
+            }
+
+            countedItemsMapRef.current = restoredMap;
+            setCountedItemsMap(restoredMap);
         } catch (e) {
             console.warn('[W2W Cache] Error leyendo caché local:', e);
         }
@@ -272,6 +455,12 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
 
     // Download full master catalog for offline lookup
     const syncMasterCatalog = useCallback(async (stk: string) => {
+        if (!isConnectedRef.current) {
+            console.log(
+                '[W2W Cache] Sin red: conservando catálogo local guardado.'
+            );
+            return;
+        }
         setSyncingMaster(true);
         try {
             // Endpoint recomendado en FastAPI: devuelve array o diccionario de ítems de la bodega
@@ -350,6 +539,15 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
 
     // Fetch available stockrooms & stages
     const fetchStockrooms = useCallback(async () => {
+        if (!isConnectedRef.current) {
+            const cachedList = await AsyncStorage.getItem(
+                W2W_STOCKROOMS_LIST_KEY
+            ).catch(() => null);
+            if (cachedList) {
+                setAvailableStockrooms(JSON.parse(cachedList) as string[]);
+            }
+            return;
+        }
         setLoadingStockrooms(true);
         try {
             const res = await client.get<W2WStockroomsResponse>(
@@ -392,36 +590,50 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     // Fetch Active Session for User & Stockroom
     const fetchActiveSession =
         useCallback(async (): Promise<W2WSession | null> => {
+            if (!isConnectedRef.current) {
+                console.log(
+                    '[W2W Offline] Sin red; manteniendo sesión en caché.'
+                );
+                return activeSessionRef.current;
+            }
             setLoadingSession(true);
             try {
                 const res = await client.get<W2WSession>(
                     '/api/sessions/active',
                     { params: { stockroom } }
                 );
-                if (res.data && (res.data.id || res.data.session_id)) {
+                if (
+                    !res.data ||
+                    typeof res.data !== 'object' ||
+                    Array.isArray(res.data)
+                ) {
+                    // Respuesta no válida (ej. portal cautivo HTML): mantener sesión local
+                    return activeSessionRef.current;
+                }
+                if (res.data.id || res.data.session_id) {
                     const sId = res.data.id || res.data.session_id || null;
+                    activeSessionRef.current = res.data;
+                    activeSessionIdRef.current = sId;
                     setActiveSession(res.data);
                     setActiveSessionId(sId);
                     persistLocalState(stockroom, stageRef.current, res.data, sId);
                     return res.data;
                 } else {
+                    activeSessionRef.current = null;
+                    activeSessionIdRef.current = null;
                     setActiveSession(null);
                     setActiveSessionId(null);
                     persistLocalState(stockroom, stageRef.current, null, null);
                     return null;
                 }
             } catch (e) {
-                // Si falla por red, conservamos la sesión guardada localmente para permitir trabajo offline
-                if (isAxiosError(e) && !e.response) {
-                    console.log(
-                        '[W2W Offline] Sin red al verificar sesión; manteniendo sesión en caché.'
-                    );
-                    return activeSessionRef.current;
-                }
-                console.error('Error al obtener sesión activa:', e);
-                setActiveSession(null);
-                setActiveSessionId(null);
-                return null;
+                // Ante cualquier fallo de red, timeout, 5xx o sesión HTTP vencida (401/403),
+                // conservamos la sesión local en caché para no interrumpir el conteo offline.
+                console.log(
+                    '[W2W Offline] No se pudo validar sesión en servidor; manteniendo sesión en caché.',
+                    isAxiosError(e) ? e.response?.status || e.message : e
+                );
+                return activeSessionRef.current;
             } finally {
                 setLoadingSession(false);
             }
@@ -429,17 +641,25 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
 
     // Fetch Stage Info
     const fetchSummary = useCallback(async () => {
+        if (!isConnectedRef.current) {
+            return;
+        }
         setLoadingSummary(true);
         try {
             const res = await client.get<{
                 stage?: number | null;
                 stages_by_stockroom?: Record<string, number>;
             }>('/api/admin/inventory/summary', { params: { stockroom } });
-            if (res.data) {
+            if (
+                res.data &&
+                typeof res.data === 'object' &&
+                !Array.isArray(res.data)
+            ) {
                 const nextStage =
                     res.data.stage !== undefined && res.data.stage !== null
                         ? Number(res.data.stage)
                         : 0;
+                stageRef.current = nextStage;
                 setStage(nextStage);
                 persistLocalState(
                     stockroom,
@@ -665,6 +885,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     const checkServerPhaseChange = useCallback(async () => {
         if (!hasConfirmedStockroom || stageRef.current <= 0) return;
         if (phaseAlertShownRef.current) return;
+        if (!isConnectedRef.current) return;
 
         try {
             const [summaryRes, sessionRes] = await Promise.all([
@@ -677,6 +898,17 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                     timeout: 5000,
                 }),
             ]);
+
+            if (
+                !summaryRes.data ||
+                typeof summaryRes.data !== 'object' ||
+                Array.isArray(summaryRes.data) ||
+                !sessionRes.data ||
+                typeof sessionRes.data !== 'object' ||
+                Array.isArray(sessionRes.data)
+            ) {
+                return;
+            }
 
             const prevStage = stageRef.current;
             const nextStage =
@@ -738,6 +970,45 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     }, [hasConfirmedStockroom, stockroom, persistLocalState, fetchStockrooms]);
 
     useEffect(() => {
+        if (!hasConfirmedStockroom) return;
+
+        const handleSyncCompleted = async () => {
+            const pendingKeys = await getPendingW2WKeys(stockroom);
+            setRecentCounts((prev) => {
+                let changed = false;
+                const next = prev.map((item) => {
+                    if (!item.offline) return item;
+                    const key = buildCountKey(
+                        item.counted_location,
+                        item.item_code
+                    );
+                    if (!pendingKeys.has(key)) {
+                        changed = true;
+                        return { ...item, offline: false };
+                    }
+                    return item;
+                });
+                if (changed) {
+                    AsyncStorage.setItem(
+                        getRecentCountsKey(stockroom),
+                        JSON.stringify(next)
+                    ).catch(() => {});
+                }
+                return changed ? next : prev;
+            });
+            fetchSummary();
+            if (stageRef.current >= 2) {
+                fetchRecounts();
+            }
+        };
+
+        eventEmitter.on(EVENTS.SYNC_COMPLETED, handleSyncCompleted);
+        return () => {
+            eventEmitter.off(EVENTS.SYNC_COMPLETED, handleSyncCompleted);
+        };
+    }, [hasConfirmedStockroom, stockroom, fetchSummary, fetchRecounts]);
+
+    useEffect(() => {
         if (!hasConfirmedStockroom || stage <= 0) return;
 
         const interval = setInterval(() => {
@@ -757,7 +1028,10 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
     }, [hasConfirmedStockroom, stage, checkServerPhaseChange]);
 
     // Handle Item Search (Online first, fallback to local master cache)
-    const handleSearchItem = async (codeToSearch?: string) => {
+    const handleSearchItem = async (
+        codeToSearch?: string,
+        options?: { skipFocusQty?: boolean }
+    ) => {
         const rawCode = (codeToSearch || itemCode || '').trim();
         if (!rawCode) return;
         const parsed = parseBarcode(rawCode);
@@ -767,15 +1041,25 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
 
         setLoadingItem(true);
         let shouldFocusQty = false;
+        let resolvedCode = code;
+        let resolvedDesc = 'N/A';
+        let resolvedBinSys = 'N/A';
+
         try {
+            if (!isConnectedRef.current) {
+                throw new Error('OFFLINE_MODE');
+            }
             const res = await client.get<W2WItemData>(
                 `/api/get_item_for_counting/${encodeURIComponent(code)}`,
                 { params: { stockroom }, timeout: 5000 }
             );
             if (res.data) {
-                setItemCode(res.data.item_code);
-                setDescription(res.data.description || 'N/A');
-                setBinSys(res.data.bin_location || 'N/A');
+                resolvedCode = res.data.item_code || code;
+                resolvedDesc = res.data.description || 'N/A';
+                resolvedBinSys = res.data.bin_location || 'N/A';
+                setItemCode(resolvedCode);
+                setDescription(resolvedDesc);
+                setBinSys(resolvedBinSys);
                 setItemData(res.data);
                 cacheSingleMasterItem(stockroom, res.data);
                 Vibration.vibrate(70);
@@ -785,14 +1069,18 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             // Buscar primero en el maestro cacheado localmente antes de declarar hallazgo
             const cachedItem = masterCatalog[code];
             if (cachedItem) {
-                setItemCode(cachedItem.item_code);
-                setDescription(cachedItem.description || 'N/A');
-                setBinSys(cachedItem.bin_location || 'N/A');
+                resolvedCode = cachedItem.item_code;
+                resolvedDesc = cachedItem.description || 'N/A';
+                resolvedBinSys = cachedItem.bin_location || 'N/A';
+                setItemCode(resolvedCode);
+                setDescription(resolvedDesc);
+                setBinSys(resolvedBinSys);
                 setItemData({ ...cachedItem, in_master: true });
                 Vibration.vibrate(70);
                 shouldFocusQty = true;
             } else {
-                const isNetworkDrop = isAxiosError(e) && !e.response;
+                const isNetworkDrop =
+                    !isConnectedRef.current || (isAxiosError(e) && !e.response);
                 Vibration.vibrate([0, 150, 100, 150]);
                 if (!isNetworkDrop) {
                     Alert.alert(
@@ -803,6 +1091,8 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 const fallbackDesc = isNetworkDrop
                     ? 'SIN RED (VERIFICAR AL SINCRONIZAR)'
                     : 'HALLAZGO (SIN REGISTRO EN MAESTRO)';
+                resolvedDesc = fallbackDesc;
+                resolvedBinSys = 'N/A';
                 setItemData({
                     item_code: code,
                     description: fallbackDesc,
@@ -816,7 +1106,22 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             }
         } finally {
             setLoadingItem(false);
-            if (shouldFocusQty) {
+            const locClean = countedLocation.trim().toUpperCase();
+            const existing = locClean
+                ? findPreviousCount(locClean, resolvedCode)
+                : null;
+            if (existing) {
+                shouldFocusQty = false;
+                Vibration.vibrate([0, 80, 50, 80]);
+                setDuplicatePrompt({
+                    item_code: resolvedCode,
+                    counted_location: locClean,
+                    previous_qty: existing.counted_qty,
+                    description: resolvedDesc,
+                    bin_location_system: resolvedBinSys,
+                });
+            }
+            if (shouldFocusQty && !options?.skipFocusQty) {
                 setTimeout(() => {
                     qtyInputRef.current?.focus();
                 }, 100);
@@ -965,8 +1270,24 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             return;
         }
 
+        // Verificar si la llave (BIN + item_code) ya tiene un conteo previo
+        const existingCount = findPreviousCount(locClean, codeClean);
+        if (existingCount) {
+            Vibration.vibrate([0, 80, 50, 80]);
+            setDuplicatePrompt({
+                item_code: codeClean,
+                counted_location: locClean,
+                previous_qty: existingCount.counted_qty,
+                description:
+                    description || existingCount.description || 'N/A',
+                bin_location_system:
+                    binSys || existingCount.bin_location_system || 'N/A',
+            });
+            return;
+        }
+
         // Verificar sesión activa antes de guardar (usa caché local si no hay red)
-        let currentSessionId = activeSessionId;
+        let currentSessionId = activeSessionId || activeSessionIdRef.current;
         if (!currentSessionId) {
             const active = await fetchActiveSession();
             if (active && (active.id || active.session_id)) {
@@ -990,6 +1311,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
         }
 
         setIsSaving(true);
+        const nowIso = new Date().toISOString();
         const payload = {
             session_id: currentSessionId,
             stockroom: stockroom || '01',
@@ -998,38 +1320,49 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             counted_location: locClean,
             description: description || 'N/A',
             bin_location_system: binSys || 'N/A',
-            timestamp: new Date().toISOString(),
+            timestamp: nowIso,
         };
+
+        const countRecord: CountedItemRecord = {
+            item_code: codeClean,
+            counted_location: locClean,
+            counted_qty: qtyNum,
+            description: description || 'N/A',
+            bin_location_system: binSys || 'N/A',
+            timestamp: nowIso,
+            session_id: currentSessionId,
+            stage: stageRef.current,
+        };
+
+        const resetFormAfterSave = () => {
+            setItemCode('');
+            setDescription('');
+            setBinSys('');
+            setItemData(null);
+            setCountedQty('');
+            setTimeout(() => itemInputRef.current?.focus(), 150);
+        };
+
+        // Guardado instantáneo en cola offline cuando no hay red
+        if (!isConnectedRef.current) {
+            try {
+                await queueRequest('/api/w2w/save_count', 'post', payload);
+                eventEmitter.emit(EVENTS.SYNC_NEEDED);
+                Vibration.vibrate([0, 80, 40, 80]);
+                recordLocalCount(stockroom || '01', countRecord, true);
+                resetFormAfterSave();
+            } finally {
+                setIsSaving(false);
+            }
+            return;
+        }
 
         try {
             const res = await client.post('/api/w2w/save_count', payload);
             if (res.status === 200 || res.status === 201) {
                 Vibration.vibrate([0, 100, 50, 100]);
-
-                setRecentCounts((prev) => [
-                    {
-                        id: Date.now(),
-                        item_code: codeClean,
-                        counted_location: locClean,
-                        counted_qty: qtyNum,
-                        description: description || 'N/A',
-                        time: new Date().toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                        }),
-                        offline: false,
-                    },
-                    ...prev.slice(0, 9),
-                ]);
-
-                // Reset product & quantity while keeping BIN for fast consecutive scanning
-                setItemCode('');
-                setDescription('');
-                setBinSys('');
-                setItemData(null);
-                setCountedQty('');
-                setTimeout(() => itemInputRef.current?.focus(), 150);
-
+                recordLocalCount(stockroom || '01', countRecord, false);
+                resetFormAfterSave();
                 fetchSummary();
                 if (stage >= 2) fetchRecounts();
             }
@@ -1037,29 +1370,8 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             // Si no hubo respuesta del servidor, client.ts ya encoló el POST en offline_sync_queue
             if (isAxiosError(e) && !e.response) {
                 Vibration.vibrate([0, 80, 40, 80]);
-
-                setRecentCounts((prev) => [
-                    {
-                        id: Date.now(),
-                        item_code: codeClean,
-                        counted_location: locClean,
-                        counted_qty: qtyNum,
-                        description: description || 'N/A',
-                        time: new Date().toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                        }),
-                        offline: true,
-                    },
-                    ...prev.slice(0, 9),
-                ]);
-
-                setItemCode('');
-                setDescription('');
-                setBinSys('');
-                setItemData(null);
-                setCountedQty('');
-                setTimeout(() => itemInputRef.current?.focus(), 150);
+                recordLocalCount(stockroom || '01', countRecord, true);
+                resetFormAfterSave();
                 return;
             }
 
@@ -1077,6 +1389,104 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                 fetchActiveSession();
             }
             Alert.alert('Error al Guardar', msg);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // Confirm Overwrite Correction from Modal 2
+    const handleConfirmCorrection = async () => {
+        if (!correctionModalData) return;
+        const newQty = parseInt(correctionQty, 10);
+        if (isNaN(newQty) || newQty < 0) {
+            Alert.alert(
+                'Validación',
+                'Ingrese una cantidad entera válida (>= 0).'
+            );
+            return;
+        }
+
+        const currentSessionId = activeSessionId || activeSessionIdRef.current;
+        if (!currentSessionId) {
+            Alert.alert(
+                'Sin Sesión Activa',
+                'No tienes una sesión de inventario activa.'
+            );
+            return;
+        }
+
+        setIsSaving(true);
+        const nowIso = new Date().toISOString();
+        const { item_code, counted_location, description: desc, bin_location_system } =
+            correctionModalData;
+
+        const payload = {
+            session_id: currentSessionId,
+            stockroom: stockroom || '01',
+            item_code,
+            counted_qty: newQty,
+            counted_location,
+            description: desc || 'N/A',
+            bin_location_system: bin_location_system || 'N/A',
+            timestamp: nowIso,
+        };
+
+        const countRecord: CountedItemRecord = {
+            item_code,
+            counted_location,
+            counted_qty: newQty,
+            description: desc || 'N/A',
+            bin_location_system: bin_location_system || 'N/A',
+            timestamp: nowIso,
+            session_id: currentSessionId,
+            stage: stageRef.current,
+        };
+
+        const finishCorrection = () => {
+            setCorrectionModalData(null);
+            setCorrectionQty('');
+            setItemCode('');
+            setDescription('');
+            setBinSys('');
+            setItemData(null);
+            setCountedQty('');
+            setTimeout(() => itemInputRef.current?.focus(), 150);
+        };
+
+        if (!isConnectedRef.current) {
+            try {
+                await queueRequest('/api/w2w/save_count', 'post', payload);
+                eventEmitter.emit(EVENTS.SYNC_NEEDED);
+                Vibration.vibrate([0, 80, 40, 80]);
+                recordLocalCount(stockroom || '01', countRecord, true);
+                finishCorrection();
+            } finally {
+                setIsSaving(false);
+            }
+            return;
+        }
+
+        try {
+            const res = await client.post('/api/w2w/save_count', payload);
+            if (res.status === 200 || res.status === 201) {
+                Vibration.vibrate([0, 100, 50, 100]);
+                recordLocalCount(stockroom || '01', countRecord, false);
+                finishCorrection();
+                fetchSummary();
+                if (stage >= 2) fetchRecounts();
+            }
+        } catch (e) {
+            if (isAxiosError(e) && !e.response) {
+                Vibration.vibrate([0, 80, 40, 80]);
+                recordLocalCount(stockroom || '01', countRecord, true);
+                finishCorrection();
+                return;
+            }
+            const msg = isAxiosError(e)
+                ? (e.response?.data as { detail?: string } | undefined)
+                      ?.detail || 'No se pudo actualizar el conteo.'
+                : 'No se pudo actualizar el conteo.';
+            Alert.alert('Error al Corregir', msg);
         } finally {
             setIsSaving(false);
         }
@@ -1111,7 +1521,7 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             return;
         }
 
-        const currentSessionId = activeSessionId;
+        const currentSessionId = activeSessionId || activeSessionIdRef.current;
         if (!currentSessionId) {
             Alert.alert('Sin Sesión', 'Inicie una sesión de inventario.');
             return;
@@ -1129,6 +1539,29 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
             bin_location_system: recountModalItem.bin_location || 'N/A',
             timestamp: new Date().toISOString(),
         };
+
+        if (!isConnectedRef.current) {
+            try {
+                await queueRequest('/api/w2w/save_count', 'post', payload);
+                eventEmitter.emit(EVENTS.SYNC_NEEDED);
+                Vibration.vibrate([0, 80, 40, 80]);
+                setRecountItems((prev) =>
+                    prev.map((it) =>
+                        it.item_code === codeClean
+                            ? {
+                                  ...it,
+                                  is_recounted: true,
+                                  counted_qty_in_stage: qtyNum,
+                              }
+                            : it
+                    )
+                );
+                setRecountModalItem(null);
+            } finally {
+                setIsSaving(false);
+            }
+            return;
+        }
 
         try {
             const res = await client.post('/api/w2w/save_count', payload);
@@ -1981,6 +2414,28 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                         style={styles.inputQty}
                                         value={countedQty}
                                         onChangeText={setCountedQty}
+                                        onFocus={() => {
+                                            const raw = itemCode.trim();
+                                            if (!raw || loadingItem) return;
+                                            const parsed = parseBarcode(raw);
+                                            const normalized = (
+                                                parsed.itemCode || raw
+                                            )
+                                                .trim()
+                                                .toUpperCase();
+                                            if (
+                                                normalized &&
+                                                (!itemData ||
+                                                    itemData.item_code
+                                                        .trim()
+                                                        .toUpperCase() !==
+                                                        normalized)
+                                            ) {
+                                                handleSearchItem(raw, {
+                                                    skipFocusQty: true,
+                                                });
+                                            }
+                                        }}
                                         placeholder="0"
                                         keyboardType="number-pad"
                                         selectTextOnFocus={true}
@@ -2249,6 +2704,169 @@ export const W2WCount: React.FC<W2WCountProps> = ({ navigation }) => {
                                 );
                             })}
                         </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Modal 1: Aviso de Conteo Previo Duplicado (BIN + SKU) */}
+            <Modal
+                visible={duplicatePrompt !== null}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setDuplicatePrompt(null)}
+            >
+                <View style={styles.modalBackdrop}>
+                    <View style={styles.modalCard}>
+                        <View style={styles.modalHeader}>
+                            <View style={styles.dupHeaderLeft}>
+                                <Icon
+                                    name="alert-circle-outline"
+                                    size={22}
+                                    color="#b45309"
+                                />
+                                <Text style={styles.modalTitle}>
+                                    Conteo Previo Detectado
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                onPress={() => setDuplicatePrompt(null)}
+                            >
+                                <Icon
+                                    name="close"
+                                    size={20}
+                                    color={fluent.colors.neutralSecondary}
+                                />
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={styles.dupBodyText}>
+                            El ítem{' '}
+                            <Text style={styles.metaBold}>
+                                {duplicatePrompt?.item_code}
+                            </Text>{' '}
+                            ya tiene un conteo previo en la ubicación{' '}
+                            <Text style={styles.metaBold}>
+                                {duplicatePrompt?.counted_location}
+                            </Text>
+                            .
+                        </Text>
+                        <View style={styles.dupPrevBox}>
+                            <Text style={styles.dupPrevLabel}>
+                                Cantidad digitada anteriormente:
+                            </Text>
+                            <Text style={styles.dupPrevValue}>
+                                {duplicatePrompt?.previous_qty} uds
+                            </Text>
+                        </View>
+                        <Text style={styles.dupQuestionText}>
+                            ¿Deseas corregir la cantidad digitada anteriormente?
+                        </Text>
+                        <View style={styles.dupActionsRow}>
+                            <TouchableOpacity
+                                style={styles.dupCancelBtn}
+                                onPress={() => setDuplicatePrompt(null)}
+                            >
+                                <Text style={styles.dupCancelBtnText}>
+                                    Cancelar
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.dupConfirmBtn}
+                                onPress={() => {
+                                    if (!duplicatePrompt) return;
+                                    const data = duplicatePrompt;
+                                    setDuplicatePrompt(null);
+                                    setCorrectionQty(String(data.previous_qty));
+                                    setCorrectionModalData(data);
+                                }}
+                            >
+                                <Text style={styles.dupConfirmBtnText}>
+                                    Corregir
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Modal 2: Corregir y Sobrescribir Cantidad Total */}
+            <Modal
+                visible={correctionModalData !== null}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setCorrectionModalData(null)}
+            >
+                <View style={styles.modalBackdrop}>
+                    <View style={styles.modalCard}>
+                        <View style={styles.modalHeader}>
+                            <Text selectable style={styles.modalTitle}>
+                                Corregir Conteo —{' '}
+                                {correctionModalData?.item_code}
+                            </Text>
+                            <TouchableOpacity
+                                onPress={() => setCorrectionModalData(null)}
+                            >
+                                <Icon
+                                    name="close"
+                                    size={20}
+                                    color={fluent.colors.neutralSecondary}
+                                />
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={styles.recountModalDesc} numberOfLines={2}>
+                            Ubicación: {correctionModalData?.counted_location} •{' '}
+                            {correctionModalData?.description || 'N/A'}
+                        </Text>
+                        <View style={styles.dupPrevBox}>
+                            <Text style={styles.dupPrevLabel}>
+                                Cantidad anterior:
+                            </Text>
+                            <Text style={styles.dupPrevValue}>
+                                {correctionModalData?.previous_qty} uds
+                            </Text>
+                        </View>
+                        <Text style={styles.label}>
+                            NUEVA CANTIDAD TOTAL (SOBRESCRIBIR) *
+                        </Text>
+                        <TextInput
+                            style={styles.recountModalInput}
+                            value={correctionQty}
+                            onChangeText={setCorrectionQty}
+                            keyboardType="number-pad"
+                            placeholder="0"
+                            selectTextOnFocus
+                            autoFocus
+                            onSubmitEditing={handleConfirmCorrection}
+                        />
+                        <View style={styles.dupActionsRow}>
+                            <TouchableOpacity
+                                style={styles.dupCancelBtn}
+                                onPress={() => setCorrectionModalData(null)}
+                                disabled={isSaving}
+                            >
+                                <Text style={styles.dupCancelBtnText}>
+                                    Cancelar
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[
+                                    styles.dupConfirmBtn,
+                                    isSaving && styles.saveButtonDisabled,
+                                ]}
+                                onPress={handleConfirmCorrection}
+                                disabled={isSaving}
+                            >
+                                {isSaving ? (
+                                    <ActivityIndicator
+                                        size="small"
+                                        color="#fff"
+                                    />
+                                ) : (
+                                    <Text style={styles.dupConfirmBtnText}>
+                                        Sobrescribir Total
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </View>
             </Modal>
@@ -3200,6 +3818,76 @@ const styles = StyleSheet.create({
         color: fluent.colors.neutralPrimary,
         backgroundColor: fluent.colors.white,
         marginBottom: 12,
+    },
+    dupHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    dupBodyText: {
+        fontSize: 13,
+        color: fluent.colors.neutralPrimary,
+        lineHeight: 19,
+        marginBottom: 10,
+    },
+    dupPrevBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: '#fef3c7',
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+        borderRadius: fluent.radius.xs,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        marginBottom: 12,
+    },
+    dupPrevLabel: {
+        fontSize: 12,
+        color: '#92400e',
+        fontWeight: '600',
+    },
+    dupPrevValue: {
+        fontSize: 14,
+        color: '#78350f',
+        fontWeight: '700',
+    },
+    dupQuestionText: {
+        fontSize: 13,
+        color: fluent.colors.neutralSecondary,
+        marginBottom: 14,
+    },
+    dupActionsRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    dupCancelBtn: {
+        flex: 1,
+        paddingVertical: 11,
+        borderRadius: fluent.radius.xs,
+        borderWidth: 1,
+        borderColor: fluent.colors.neutralQuaternary,
+        backgroundColor: fluent.colors.neutralLighter,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    dupCancelBtnText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: fluent.colors.neutralSecondary,
+    },
+    dupConfirmBtn: {
+        flex: 1,
+        paddingVertical: 11,
+        borderRadius: fluent.radius.xs,
+        backgroundColor: fluent.colors.primary,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    dupConfirmBtnText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: fluent.colors.white,
     },
 });
 

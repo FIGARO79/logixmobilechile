@@ -156,9 +156,6 @@ const ManualCount: React.FC = () => {
 
     useDataWedge((code) => handleScan(code));
 
-    const difference = itemData
-        ? parseInt(physicalQty || '0', 10) - itemData.system_qty
-        : 0;
     const isBinMatch =
         Boolean(itemData && binLocation) &&
         binLocation.toUpperCase() === itemData?.system_bin?.toUpperCase();
@@ -296,33 +293,9 @@ const ManualCount: React.FC = () => {
                     </Text>
                     <View style={styles.analysisGrid}>
                         <View style={styles.analysisItem}>
-                            <Text style={styles.analysisField}>Sistema</Text>
-                            <Text style={styles.analysisValue}>
-                                {itemData?.system_qty || 0}
-                            </Text>
-                        </View>
-                        <View style={styles.analysisItem}>
                             <Text style={styles.analysisField}>Auditoría</Text>
                             <Text style={styles.analysisValue}>
                                 {physicalQty || 0}
-                            </Text>
-                        </View>
-                        <View style={styles.analysisItem}>
-                            <Text style={styles.analysisField}>Diferencia</Text>
-                            <Text
-                                style={[
-                                    styles.analysisValue,
-                                    {
-                                        color:
-                                            difference > 0
-                                                ? fluent.colors.primary
-                                                : difference < 0
-                                                  ? fluent.colors.error
-                                                  : fluent.colors.success,
-                                    },
-                                ]}
-                            >
-                                {difference > 0 ? `+${difference}` : difference}
                             </Text>
                         </View>
                     </View>

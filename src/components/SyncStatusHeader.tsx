@@ -1,11 +1,19 @@
 import React, { useContext, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
+import {
+    View,
+    Text,
+    StyleSheet,
+    Animated,
+    Easing,
+    TouchableOpacity,
+} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { SyncContext } from '../context/SyncContext';
 import fluent from '../theme/fluent';
 
 const SyncStatusHeader: React.FC = () => {
-    const { pendingCount, isSyncing, isConnected } = useContext(SyncContext);
+    const { pendingCount, isSyncing, isConnected, syncNow } =
+        useContext(SyncContext);
     const spinValue = useRef(new Animated.Value(0)).current;
 
     // Animación de rotación para cuando está sincronizando
@@ -55,7 +63,11 @@ const SyncStatusHeader: React.FC = () => {
 
     if (pendingCount > 0) {
         return (
-            <View style={styles.container}>
+            <TouchableOpacity
+                style={styles.container}
+                onPress={() => syncNow()}
+                activeOpacity={0.7}
+            >
                 <View style={styles.badgeContainer}>
                     <Icon
                         name="cloud-upload-outline"
@@ -71,7 +83,7 @@ const SyncStatusHeader: React.FC = () => {
                 >
                     Pendiente
                 </Text>
-            </View>
+            </TouchableOpacity>
         );
     }
 

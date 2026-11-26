@@ -5,6 +5,7 @@ import React, {
     useCallback,
     ReactNode,
 } from 'react';
+import { AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { getQueueSize, processQueue } from '../utils/syncManager';
 import eventEmitter, { EVENTS } from '../utils/events';
@@ -14,6 +15,7 @@ export interface SyncContextValue {
     isSyncing: boolean;
     isConnected: boolean;
     refreshPendingCount: () => Promise<void>;
+    syncNow: () => Promise<void>;
 }
 
 export const SyncContext = createContext<SyncContextValue>(
@@ -26,7 +28,7 @@ interface SyncProviderProps {
 
 export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     const [pendingCount, setPendingCount] = useState(0);
-    const [isSyncing] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
     const [isConnected, setIsConnected] = useState(true);
 
     const refreshPendingCount = useCallback(async () => {
@@ -34,33 +36,66 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
         setPendingCount(size);
     }, []);
 
+    const syncNow = useCallback(async () => {
+        const state = await NetInfo.fetch();
+        if (!state.isConnected) {
+            await refreshPendingCount();
+            return;
+        }
+        const size = await getQueueSize();
+        if (size === 0) {
+            setPendingCount(0);
+            return;
+        }
+        setIsSyncing(true);
+        try {
+            await processQueue();
+        } finally {
+            await refreshPendingCount();
+            setIsSyncing(false);
+        }
+    }, [refreshPendingCount]);
+
     useEffect(() => {
-        // 1. Cargar conteo inicial
+        // 1. Cargar conteo inicial y sincronizar si hay red
         refreshPendingCount();
 
-        // 2. Escuchar el evento interno para refrescar el conteo (ej. tras encolar algo)
+        // 2. Escuchar eventos internos para refrescar el conteo
         eventEmitter.on(EVENTS.SYNC_NEEDED, refreshPendingCount);
+        eventEmitter.on(EVENTS.SYNC_COMPLETED, refreshPendingCount);
 
         // 3. Escuchar cambios de red
         const unsubscribe = NetInfo.addEventListener((state) => {
             const connected = Boolean(state.isConnected);
             setIsConnected(connected);
             if (connected) {
-                processQueue();
-                refreshPendingCount();
+                // Pequeña espera para que la interfaz de red y DNS terminen de levantarse tras modo avión
+                setTimeout(() => {
+                    syncNow();
+                }, 1200);
             }
         });
 
+        // 4. Reintentar al volver a primer plano
+        const appStateSub = AppState.addEventListener('change', (nextState) => {
+            if (nextState === 'active') {
+                syncNow();
+            }
+        });
+
+        // 5. Reintento periódico si quedaron elementos pendientes con red
         const interval = setInterval(() => {
-            refreshPendingCount();
-        }, 60000);
+            syncNow();
+        }, 20000);
 
         return () => {
             eventEmitter.off(EVENTS.SYNC_NEEDED, refreshPendingCount);
+            eventEmitter.off(EVENTS.SYNC_COMPLETED, refreshPendingCount);
             if (unsubscribe) unsubscribe();
+            appStateSub.remove();
             if (interval) clearInterval(interval);
         };
-    }, [refreshPendingCount]);
+    }, [refreshPendingCount, syncNow]);
 
     return (
         <SyncContext.Provider
@@ -69,6 +104,7 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
                 isSyncing,
                 isConnected,
                 refreshPendingCount,
+                syncNow,
             }}
         >
             {children}

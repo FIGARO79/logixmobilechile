@@ -35,6 +35,7 @@ const eventEmitter = new EventEmitter();
 
 export const EVENTS = {
     SYNC_NEEDED: 'sync_needed',
+    SYNC_COMPLETED: 'sync_completed',
 } as const;
 
 export default eventEmitter;

@@ -5,6 +5,7 @@ import axios, {
     InternalAxiosRequestConfig,
 } from 'axios';
 import axiosRetry from 'axios-retry';
+import NetInfo from '@react-native-community/netinfo';
 import { queueRequest } from '../utils/syncManager';
 import eventEmitter, { EVENTS } from '../utils/events';
 
@@ -14,6 +15,11 @@ const API_URL = 'https://logixapp.online';
 const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 let csrfToken: string | null = null;
 let csrfPromise: Promise<string | null> | null = null;
+let isNetworkConnected = true;
+
+NetInfo.addEventListener((state) => {
+    isNetworkConnected = Boolean(state.isConnected);
+});
 
 interface CsrfRequestConfig extends InternalAxiosRequestConfig {
     _csrfRetried?: boolean;
@@ -88,6 +94,9 @@ async function ensureCsrfToken(forceRefresh = false): Promise<string | null> {
     if (csrfToken && !forceRefresh) {
         return csrfToken;
     }
+    if (!isNetworkConnected) {
+        return csrfToken;
+    }
     if (csrfPromise && !forceRefresh) {
         return csrfPromise;
     }
@@ -131,6 +140,9 @@ axiosRetry(client, {
         return retryCount * 2000; // 2s, 4s, 6s
     },
     retryCondition: (error) => {
+        if (!isNetworkConnected) {
+            return false;
+        }
         // Reintentar solo si es error de red o error 5xx del servidor
         return (
             axiosRetry.isNetworkOrIdempotentRequestError(error) ||
